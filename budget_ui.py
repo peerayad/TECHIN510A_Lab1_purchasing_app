@@ -153,16 +153,21 @@ def _tab_team_budgets(session: Session) -> None:
     team_options = [_team_label(t) for t in teams]
     label_to_team = {_team_label(t): t for t in teams}
 
-    widget_key = f"budget_team_editor_{cls.id}"
+    # App-owned table data (we may assign freely). data_editor uses a separate key — Streamlit forbids
+    # assigning session_state for the same key as st.data_editor(..., key=...).
+    df_key = f"budget_team_df_{cls.id}"
+    editor_key = f"budget_team_editor_{cls.id}"
     init_df = pd.DataFrame(
         [{"Team": _team_label(t), "Assigned budget": float(t.team_budget_amount)} for t in teams]
     )
-    if widget_key not in st.session_state:
-        st.session_state[widget_key] = init_df.copy()
+    if df_key not in st.session_state:
+        st.session_state[df_key] = init_df.copy()
 
-    df_cur = st.session_state[widget_key]
+    df_cur = st.session_state[df_key]
     if len(df_cur.columns) != 2 or "Team" not in df_cur.columns:
-        st.session_state[widget_key] = init_df.copy()
+        st.session_state[df_key] = init_df.copy()
+        if editor_key in st.session_state:
+            del st.session_state[editor_key]
 
     with st.expander("Import CSV", expanded=False):
         st.markdown(
@@ -193,7 +198,7 @@ def _tab_team_budgets(session: Session) -> None:
                         for e in apply_err:
                             st.error(e)
                     else:
-                        st.session_state[widget_key] = pd.DataFrame(
+                        st.session_state[df_key] = pd.DataFrame(
                             [
                                 {"Team": _team_label(t), "Assigned budget": float(t.team_budget_amount)}
                                 for t in session.query(Team)
@@ -202,12 +207,14 @@ def _tab_team_budgets(session: Session) -> None:
                                 .all()
                             ]
                         )
+                        if editor_key in st.session_state:
+                            del st.session_state[editor_key]
                         st.success(f"Imported **{len(preview)}** row(s).")
                         st.rerun()
 
     st.markdown("##### Team budgets")
     edited = st.data_editor(
-        st.session_state[widget_key],
+        st.session_state[df_key],
         column_config={
             "Team": st.column_config.TextColumn("Team", width="large"),
             "Assigned budget": st.column_config.NumberColumn(
@@ -222,7 +229,7 @@ def _tab_team_budgets(session: Session) -> None:
         hide_index=True,
         use_container_width=True,
         num_rows="dynamic",
-        key=widget_key,
+        key=editor_key,
     )
 
     used = _labels_in_df(edited)
@@ -260,7 +267,9 @@ def _tab_team_budgets(session: Session) -> None:
                 ],
                 ignore_index=True,
             )
-            st.session_state[widget_key] = new_df
+            st.session_state[df_key] = new_df
+            if editor_key in st.session_state:
+                del st.session_state[editor_key]
             st.rerun()
 
     sum_teams = 0.0
@@ -299,7 +308,7 @@ def _tab_team_budgets(session: Session) -> None:
         for t in teams:
             t.team_budget_amount = float(amount_by_code.get(t.team_code, 0.0))
         session.commit()
-        st.session_state[widget_key] = pd.DataFrame(
+        st.session_state[df_key] = pd.DataFrame(
             [
                 {"Team": _team_label(t), "Assigned budget": float(t.team_budget_amount)}
                 for t in session.query(Team)
@@ -308,6 +317,8 @@ def _tab_team_budgets(session: Session) -> None:
                 .all()
             ]
         )
+        if editor_key in st.session_state:
+            del st.session_state[editor_key]
         st.success("Saved.")
         st.rerun()
 

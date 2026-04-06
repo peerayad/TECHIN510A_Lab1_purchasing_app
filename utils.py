@@ -141,6 +141,38 @@ def log_pr_status_change(
     )
 
 
+def log_ir_status_change(
+    session: Session, ir_id: int, from_status: Optional[str], to_status: str, user_id: int
+) -> None:
+    from models import IRStatusHistory
+
+    session.add(
+        IRStatusHistory(
+            ir_id=ir_id,
+            from_status=from_status,
+            to_status=to_status,
+            changed_by_id=user_id,
+            created_at=datetime.utcnow(),
+        )
+    )
+
+
+def log_rn_status_change(
+    session: Session, rn_id: int, from_status: Optional[str], to_status: str, user_id: int
+) -> None:
+    from models import RNStatusHistory
+
+    session.add(
+        RNStatusHistory(
+            rn_id=rn_id,
+            from_status=from_status,
+            to_status=to_status,
+            changed_by_id=user_id,
+            created_at=datetime.utcnow(),
+        )
+    )
+
+
 def net_team_pr_budget_allocated(
     session: Session, team_id: int, exclude_pr_id: Optional[int] = None
 ) -> float:

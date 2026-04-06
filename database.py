@@ -42,6 +42,7 @@ def clear_all_procurement_documents(session: Session) -> None:
         BudgetTransaction,
         DocumentNumbering,
         IRAttachment,
+        IRStatusHistory,
         InventoryReceive,
         Message,
         PRStatusHistory,
@@ -49,14 +50,17 @@ def clear_all_procurement_documents(session: Session) -> None:
         PurchaseRequest,
         PurchaseRequestItem,
         ReturnNote,
+        RNStatusHistory,
     )
 
     ir_att_dir = DATA_DIR / "ir_attachments"
     if ir_att_dir.is_dir():
         shutil.rmtree(ir_att_dir, ignore_errors=True)
 
+    session.query(RNStatusHistory).delete(synchronize_session=False)
     session.query(ReturnNote).delete(synchronize_session=False)
     session.query(IRAttachment).delete(synchronize_session=False)
+    session.query(IRStatusHistory).delete(synchronize_session=False)
     session.query(InventoryReceive).delete(synchronize_session=False)
     session.query(PurchaseOrder).delete(synchronize_session=False)
     session.query(Message).filter(Message.reference_type == "PR").delete(synchronize_session=False)
@@ -141,6 +145,42 @@ def migrate_sqlite_schema() -> None:
                     )
                 if "updated_at" not in rc:
                     conn.execute(text("ALTER TABLE return_notes ADD COLUMN updated_at DATETIME"))
+
+            if "ir_status_history" not in tables:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE ir_status_history (
+                            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                            ir_id INTEGER NOT NULL,
+                            from_status VARCHAR(80),
+                            to_status VARCHAR(80) NOT NULL,
+                            changed_by_id INTEGER NOT NULL,
+                            created_at DATETIME,
+                            FOREIGN KEY(ir_id) REFERENCES inventory_receive (id),
+                            FOREIGN KEY(changed_by_id) REFERENCES users (id)
+                        )
+                        """
+                    )
+                )
+
+            if "rn_status_history" not in tables:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE rn_status_history (
+                            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                            rn_id INTEGER NOT NULL,
+                            from_status VARCHAR(80),
+                            to_status VARCHAR(80) NOT NULL,
+                            changed_by_id INTEGER NOT NULL,
+                            created_at DATETIME,
+                            FOREIGN KEY(rn_id) REFERENCES return_notes (id),
+                            FOREIGN KEY(changed_by_id) REFERENCES users (id)
+                        )
+                        """
+                    )
+                )
 
             if "teams" in tables:
                 def team_cols() -> set[str]:

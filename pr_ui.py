@@ -39,6 +39,8 @@ from utils import (
     validate_line_items,
 )
 
+from pms_ui import BtnMark, pms_button_mark
+
 SS_SCREEN = "pr_workspace_screen"
 SS_PR_ID = "pr_workspace_pr_id"
 SS_PR_LIST_DF = "pr_list_selection_df"
@@ -194,6 +196,18 @@ def get_pr_actions(session: Session, role_id: int, status_code: str) -> List[Sta
         .filter_by(document_type="PR", status_code=status_code, role_id=role_id, is_allowed=True)
         .all()
     )
+
+
+def _pr_sap_button_style(sap: StatusActionPermission) -> tuple[str, BtnMark | None]:
+    """Returns (streamlit button type, optional mark for ``pms_button_mark``)."""
+    ak = (sap.action_key or "").lower()
+    if ak in ("submit", "create_po"):
+        return "primary", None
+    if ak in ("reject", "delete"):
+        return "secondary", "danger"
+    if ak == "edit":
+        return "secondary", "draft"
+    return "secondary", None
 
 
 def _user_has_pr_action(session: Session, role_id: int, status_code: str, action_key: str) -> bool:
@@ -443,7 +457,7 @@ def _render_list(session: Session, user: AppUser, own_only: bool) -> None:
                 "You are not assigned to any team yet, so you cannot start a purchase request. "
                 "A **Master** user must add you under **User management → Master data → Team members**."
             )
-        if st.button("New purchase request", disabled=pr_blocked):
+        if st.button("New purchase request", type="primary", disabled=pr_blocked):
             st.session_state[SS_SCREEN] = "form"
             st.session_state.pop(SS_PR_ID, None)
             st.session_state.pop("pr_line_rows", None)
@@ -633,7 +647,8 @@ def _render_form(session: Session, user: AppUser) -> None:
             link = st.text_input("l", key=f"pl_{rid_}_link", label_visibility="collapsed", placeholder="URL")
         with c7:
             if len(line_meta) > 1:
-                if st.button("Remove", key=f"pr_rm_line_{rid_}", use_container_width=True):
+                pms_button_mark("danger", container=c7)
+                if st.button("Remove", key=f"pr_rm_line_{rid_}", use_container_width=True, type="secondary"):
                     for k in (
                         f"pl_{rid_}_desc",
                         f"pl_{rid_}_qty",
@@ -674,11 +689,14 @@ def _render_form(session: Session, user: AppUser) -> None:
 
     csave, csub, ccan = st.columns(3)
     with csave:
-        save = st.button("Save draft", type="primary")
+        pms_button_mark("draft")
+        save = st.button("Save draft", type="secondary")
     with csub:
-        sub = st.button("Submit")
+        pms_button_mark(None)
+        sub = st.button("Submit", type="primary")
     with ccan:
-        cancel = st.button("Cancel")
+        pms_button_mark("danger")
+        cancel = st.button("Cancel", type="secondary")
 
     if save:
         _persist_pr(session, user, pr, cid, tid, rid, lines_data, submit=False, restrict=restrict, mids=mids)
@@ -910,11 +928,13 @@ def _render_detail(session: Session, user: AppUser) -> None:
         )
         h1, h2 = st.columns(2)
         with h1:
+            pms_button_mark("danger")
             if st.button("Cancel review → return to approver", key=f"pr_hop_return_{pr.id}", type="secondary"):
                 _hop_return_to_approver(session, pr, user)
                 st.rerun()
         with h2:
-            if st.button("Reject entire PR", key=f"pr_hop_reject_all_{pr.id}", type="primary"):
+            pms_button_mark("danger")
+            if st.button("Reject entire PR", key=f"pr_hop_reject_all_{pr.id}", type="secondary"):
                 _reject_pr_document(session, pr, user)
                 st.rerun()
 
@@ -925,11 +945,14 @@ def _render_detail(session: Session, user: AppUser) -> None:
             continue
         if sap.action_key == "create_po":
             continue
-        if st.button(sap.button_label, key=f"sap_{sap.id}"):
+        btype, bmark = _pr_sap_button_style(sap)
+        pms_button_mark(bmark)
+        if st.button(sap.button_label, key=f"sap_{sap.id}", type=btype):
             _apply_workflow(session, user, pr, sap)
 
     if pr.status == "draft" and (pr.requester_id == user.id or user.role.is_master):
-        if st.button("Edit draft", type="primary"):
+        pms_button_mark("draft")
+        if st.button("Edit draft", type="secondary"):
             st.session_state[SS_SCREEN] = "form"
             st.session_state["pr_line_rows"] = None
             st.rerun()
@@ -970,7 +993,8 @@ def _render_detail(session: Session, user: AppUser) -> None:
     if pr.status == "submitted" and _can_approver(user):
         b1, b2 = st.columns(2)
         with b1:
-            if st.button("Approve all lines", key=f"pa_all_{pr.id}"):
+            pms_button_mark(None)
+            if st.button("Approve all lines", key=f"pa_all_{pr.id}", type="primary"):
                 for it in items:
                     it.approver_decision = "approved"
                 pr.updated_at = datetime.utcnow()
@@ -980,7 +1004,8 @@ def _render_detail(session: Session, user: AppUser) -> None:
                 session.commit()
                 st.rerun()
         with b2:
-            if st.button("Reject all lines", key=f"pr_all_{pr.id}"):
+            pms_button_mark("danger")
+            if st.button("Reject all lines", key=f"pr_all_{pr.id}", type="secondary"):
                 for it in items:
                     it.approver_decision = "rejected"
                 pr.updated_at = datetime.utcnow()
@@ -1043,6 +1068,7 @@ def _render_detail(session: Session, user: AppUser) -> None:
             cpo = cols[ci]
             line_po = _active_po_for_pr_line_item(session, pr.id, it.id)
             if line_po and _po_status_blocks_create(line_po.status):
+                pms_button_mark("danger", container=cpo)
                 if cpo.button(
                     "Cancel PO",
                     key=f"pr_cancel_po_line_{pr.id}_{it.id}",
@@ -1062,14 +1088,16 @@ def _render_detail(session: Session, user: AppUser) -> None:
             if pr.status == "submitted" and _can_approver(user):
                 if ad is None:
                     y1, y2 = ac.columns(2)
-                    if y1.button("Y", key=f"py_{pr.id}_{it.id}", use_container_width=True):
+                    pms_button_mark(None, container=y1)
+                    if y1.button("Y", key=f"py_{pr.id}_{it.id}", use_container_width=True, type="primary"):
                         it.approver_decision = "approved"
                         if _maybe_submitted_to_reviewed(session, pr, user):
                             session.commit()
                             st.rerun()
                         session.commit()
                         st.rerun()
-                    if y2.button("N", key=f"pn_{pr.id}_{it.id}", use_container_width=True):
+                    pms_button_mark("danger", container=y2)
+                    if y2.button("N", key=f"pn_{pr.id}_{it.id}", use_container_width=True, type="secondary"):
                         it.approver_decision = "rejected"
                         if _maybe_submitted_to_reviewed(session, pr, user):
                             session.commit()
@@ -1081,7 +1109,8 @@ def _render_detail(session: Session, user: AppUser) -> None:
             elif pr.status == "reviewed" and _can_hop(user) and ad == "approved":
                 if not hd:
                     hy1, hy2 = ac.columns(2)
-                    if hy1.button("Y", key=f"hy_{pr.id}_{it.id}", use_container_width=True):
+                    pms_button_mark(None, container=hy1)
+                    if hy1.button("Y", key=f"hy_{pr.id}_{it.id}", use_container_width=True, type="primary"):
                         it.hop_approved = True
                         pr.updated_at = datetime.utcnow()
                         if _maybe_reviewed_to_approved(session, pr, user):
@@ -1089,7 +1118,8 @@ def _render_detail(session: Session, user: AppUser) -> None:
                             st.rerun()
                         session.commit()
                         st.rerun()
-                    if hy2.button("N", key=f"hn_{pr.id}_{it.id}", use_container_width=True):
+                    pms_button_mark("danger", container=hy2)
+                    if hy2.button("N", key=f"hn_{pr.id}_{it.id}", use_container_width=True, type="secondary"):
                         _hop_reject_line(session, pr, it, user)
                         st.rerun()
                 else:
@@ -1152,7 +1182,7 @@ def _render_detail(session: Session, user: AppUser) -> None:
         st.markdown(f"**{name}** · `{ts_label}`")
         st.write(m.message)
     nm = st.text_area("Add message", key=f"m_{pr.id}")
-    if st.button("Send", key=f"ms_{pr.id}"):
+    if st.button("Send", key=f"ms_{pr.id}", type="primary"):
         if nm.strip():
             session.add(
                 Message(

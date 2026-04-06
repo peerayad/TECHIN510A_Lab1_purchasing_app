@@ -17,9 +17,13 @@ from models import (
     PurchaseRequest,
     PurchaseRequestItem,
     ReturnNote,
+    RNStatusHistory,
     StatusActionPermission,
+    StudentList,
 )
-from utils import list_row_matches_filter
+from utils import list_row_matches_filter, log_rn_status_change
+
+from pms_ui import pms_button_mark
 
 SS_RN_SCREEN = "rn_workspace_screen"
 SS_RN_ID = "rn_workspace_rn_id"
@@ -359,13 +363,16 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
             st.error("Please add a **return reason** before submitting.")
             return
         row.reason = merged
+        old = row.status
         row.status = "submitted"
         row.updated_at = datetime.utcnow()
+        log_rn_status_change(session, row.id, old, "submitted", user.id)
         session.commit()
         st.session_state[_rn_reason_reset_key(rn.id)] = True
         st.rerun()
 
     _primary_actions = frozenset({"submit", "approve", "complete"})
+    _danger_actions = frozenset({"cancel", "void", "reject"})
     sorted_actions = sorted(
         actions,
         key=lambda x: (0 if x.action_key in _primary_actions else 1, x.action_key != "complete", x.button_label),
@@ -375,6 +382,7 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
     for idx, sap in enumerate(sorted_actions):
         btn_type = "primary" if sap.action_key in _primary_actions else "secondary"
         with action_cols[idx]:
+            pms_button_mark("danger" if sap.action_key in _danger_actions else None)
             if st.button(
                 sap.button_label,
                 key=f"rn_act_{rn.id}_{sap.action_key}",
@@ -391,8 +399,10 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
                     merged = str(st.session_state.get(rk, row.reason or "") or "").strip()
                     if merged:
                         row.reason = merged
+                old = row.status
                 row.status = sap.next_status
                 row.updated_at = datetime.utcnow()
+                log_rn_status_change(session, row.id, old, sap.next_status, user.id)
                 session.commit()
                 st.session_state[_rn_reason_reset_key(rn.id)] = True
                 st.rerun()
@@ -401,6 +411,7 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
         st.caption("Using built-in actions (database permissions will be synced on next app restart).")
         fb1, fb2 = st.columns(2)
         with fb1:
+            pms_button_mark(None)
             if st.button(
                 "Submit for HoP approval",
                 type="primary",
@@ -409,6 +420,7 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
             ):
                 _do_submit()
         with fb2:
+            pms_button_mark("danger")
             if st.button(
                 "Cancel",
                 type="secondary",
@@ -420,8 +432,10 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
                     merged = str(st.session_state.get(rk, row.reason or "") or "").strip()
                     if merged:
                         row.reason = merged
+                    old = row.status
                     row.status = "cancelled"
                     row.updated_at = datetime.utcnow()
+                    log_rn_status_change(session, row.id, old, "cancelled", user.id)
                     session.commit()
                     st.session_state[_rn_reason_reset_key(rn.id)] = True
                     st.rerun()
@@ -432,6 +446,7 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
             st.caption("Using built-in **Completed** / **Cancel** (sync permissions on next app restart if needed).")
             fc1, fc2 = st.columns(2)
             with fc1:
+                pms_button_mark(None)
                 if st.button(
                     "Completed",
                     type="primary",
@@ -440,12 +455,15 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
                 ):
                     row = session.get(ReturnNote, rn.id)
                     if row:
+                        old = row.status
                         row.status = "closed"
                         row.updated_at = datetime.utcnow()
+                        log_rn_status_change(session, row.id, old, "closed", user.id)
                         session.commit()
                         st.session_state[_rn_reason_reset_key(rn.id)] = True
                         st.rerun()
             with fc2:
+                pms_button_mark("danger")
                 if st.button(
                     "Cancel",
                     type="secondary",
@@ -454,8 +472,37 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
                 ):
                     row = session.get(ReturnNote, rn.id)
                     if row:
+                        old = row.status
                         row.status = "rejected"
                         row.updated_at = datetime.utcnow()
+                        log_rn_status_change(session, row.id, old, "rejected", user.id)
                         session.commit()
                         st.session_state[_rn_reason_reset_key(rn.id)] = True
                         st.rerun()
+
+    st.markdown("### Status log")
+    hist_rows = (
+        session.query(RNStatusHistory, AppUser, StudentList)
+        .join(AppUser, RNStatusHistory.changed_by_id == AppUser.id)
+        .join(StudentList, AppUser.student_list_id == StudentList.id)
+        .filter(RNStatusHistory.rn_id == rn.id)
+        .order_by(RNStatusHistory.created_at)
+        .all()
+    )
+    if not hist_rows:
+        st.caption("No status changes recorded yet.")
+    else:
+        log_table: List[Dict[str, str]] = []
+        for h, actor, stud in hist_rows:
+            actor_name = f"{stud.first_name} {stud.last_name}".strip() or actor.email
+            ts = h.created_at.strftime("%Y-%m-%d %H:%M UTC") if h.created_at else "—"
+            prev = h.from_status if h.from_status else "—"
+            log_table.append(
+                {
+                    "When (UTC)": ts,
+                    "By": actor_name,
+                    "From": prev,
+                    "To": h.to_status,
+                }
+            )
+        st.dataframe(pd.DataFrame(log_table), hide_index=True, use_container_width=True)

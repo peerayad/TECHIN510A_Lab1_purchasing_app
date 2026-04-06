@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -14,13 +14,23 @@ from models import (
     AppUser,
     DocumentStatus,
     IRAttachment,
+    IRStatusHistory,
     InventoryReceive,
     PurchaseOrder,
     PurchaseRequest,
     PurchaseRequestItem,
     ReturnNote,
+    StudentList,
 )
-from utils import list_row_matches_filter, next_document_number, save_ir_attachment_file
+from utils import (
+    list_row_matches_filter,
+    log_ir_status_change,
+    log_rn_status_change,
+    next_document_number,
+    save_ir_attachment_file,
+)
+
+from pms_ui import pms_button_mark
 
 SS_IR_SCREEN = "ir_workspace_screen"
 SS_IR_ID = "ir_workspace_ir_id"
@@ -61,8 +71,8 @@ def _ir_status_label(session: Session, status_code: str) -> str:
 
 
 def _try_create_return_note(
-    session: Session, ir_id: int, pr: PurchaseRequest | None
-) -> tuple[bool, str, int | None]:
+    session: Session, ir_id: int, pr: PurchaseRequest | None, user: AppUser
+) -> Tuple[bool, str, int | None]:
     if pr is None:
         return False, "Missing purchase request.", None
     ir_row = session.get(InventoryReceive, ir_id)
@@ -80,6 +90,8 @@ def _try_create_return_note(
         updated_at=datetime.utcnow(),
     )
     session.add(note)
+    session.flush()
+    log_rn_status_change(session, note.id, None, "draft", user.id)
     session.commit()
     session.refresh(note)
     return True, note.rn_number, note.id
@@ -325,10 +337,12 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
                 and pr
                 and pr.requester_id == user.id
             ):
+                old_st = row.status
                 row.requester_accepted_at = datetime.utcnow()
                 row.requester_accepted_by_id = user.id
                 row.status = "closed"
                 row.updated_at = datetime.utcnow()
+                log_ir_status_change(session, row.id, old_st, "closed", user.id)
                 session.commit()
                 st.rerun()
     elif _user_is_pr_requester(user, pr) and ir_st == "open":
@@ -345,8 +359,9 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
     if ir_closed:
         if mv_rn and mv_rn.can_view and _user_is_pr_requester(user, pr):
             st.caption("Create a return note linked to this receipt (draft).")
+            pms_button_mark("orange")
             if st.button("Return", type="secondary", key=f"ir_d_return_{ir.id}"):
-                ok_rn, info, new_rn_id = _try_create_return_note(session, ir.id, pr)
+                ok_rn, info, new_rn_id = _try_create_return_note(session, ir.id, pr, user)
                 if ok_rn and new_rn_id is not None:
                     import rn_ui
 
@@ -415,7 +430,8 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
                 value=bool(ir.invoice_ok),
                 key=f"ir_d_chk_inv_{ir.id}",
             )
-        if st.button("Save checklist", type="primary", key=f"ir_d_save_chk_{ir.id}"):
+        pms_button_mark("draft")
+        if st.button("Save checklist", type="secondary", key=f"ir_d_save_chk_{ir.id}"):
             row = session.get(InventoryReceive, ir.id)
             if row:
                 row.po_document_ok = bool(v_po)
@@ -452,9 +468,11 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
             if st.button("Ready to pick up", type="primary", key=f"ir_d_ready_pickup_{ir.id}"):
                 row = session.get(InventoryReceive, ir.id)
                 if row and _ir_status_key(row.status) == "open":
+                    old_st = row.status
                     row.status = "ready_for_pickup"
                     row.pickup_ready = True
                     row.updated_at = datetime.utcnow()
+                    log_ir_status_change(session, row.id, old_st, "ready_for_pickup", user.id)
                     session.commit()
                     st.rerun()
         else:
@@ -467,6 +485,33 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
         st.success(
             "This receipt is **Ready to pick up**. The requester can accept once they have collected the items."
         )
+
+    st.markdown("### Status log")
+    hist_rows = (
+        session.query(IRStatusHistory, AppUser, StudentList)
+        .join(AppUser, IRStatusHistory.changed_by_id == AppUser.id)
+        .join(StudentList, AppUser.student_list_id == StudentList.id)
+        .filter(IRStatusHistory.ir_id == ir.id)
+        .order_by(IRStatusHistory.created_at)
+        .all()
+    )
+    if not hist_rows:
+        st.caption("No status changes recorded yet.")
+    else:
+        log_table: List[Dict[str, str]] = []
+        for h, actor, stud in hist_rows:
+            actor_name = f"{stud.first_name} {stud.last_name}".strip() or actor.email
+            ts = h.created_at.strftime("%Y-%m-%d %H:%M UTC") if h.created_at else "—"
+            prev = h.from_status if h.from_status else "—"
+            log_table.append(
+                {
+                    "When (UTC)": ts,
+                    "By": actor_name,
+                    "From": prev,
+                    "To": h.to_status,
+                }
+            )
+        st.dataframe(pd.DataFrame(log_table), hide_index=True, use_container_width=True)
 
     st.markdown("### Attachments")
     st.caption("Download existing files or upload a new one (max 15 MB per file).")

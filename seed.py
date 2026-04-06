@@ -15,6 +15,7 @@ from models import (
     DocumentStatus,
     FieldLockConfig,
     FieldRule,
+    IRStatusHistory,
     InventoryReceive,
     MenuVisibility,
     Permission,
@@ -452,6 +453,17 @@ def _seed_data(session: Session) -> None:
             status="open",
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
+        )
+    )
+    session.flush()
+    ir_seed = session.query(InventoryReceive).filter_by(ir_number="IR2026-00001").one()
+    session.add(
+        IRStatusHistory(
+            ir_id=ir_seed.id,
+            from_status=None,
+            to_status="open",
+            changed_by_id=pu.id,
+            created_at=datetime.utcnow(),
         )
     )
     dn_po = session.query(DocumentNumbering).filter_by(document_type="PO").one()

@@ -72,6 +72,12 @@ class AppUser(Base):
     pr_status_changes: Mapped[List["PRStatusHistory"]] = relationship(
         back_populates="changed_by", foreign_keys="PRStatusHistory.changed_by_id"
     )
+    ir_status_changes: Mapped[List["IRStatusHistory"]] = relationship(
+        back_populates="changed_by", foreign_keys="IRStatusHistory.changed_by_id"
+    )
+    rn_status_changes: Mapped[List["RNStatusHistory"]] = relationship(
+        back_populates="changed_by", foreign_keys="RNStatusHistory.changed_by_id"
+    )
 
 
 class Permission(Base):
@@ -297,6 +303,9 @@ class InventoryReceive(Base):
         back_populates="inventory_receive",
         cascade="all, delete-orphan",
     )
+    status_history: Mapped[List["IRStatusHistory"]] = relationship(
+        back_populates="inventory_receive", cascade="all, delete-orphan"
+    )
 
 
 class IRAttachment(Base):
@@ -327,6 +336,41 @@ class ReturnNote(Base):
     product_dropped_off: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     inventory_receive: Mapped["InventoryReceive"] = relationship(back_populates="return_notes")
+    status_history: Mapped[List["RNStatusHistory"]] = relationship(
+        back_populates="return_note", cascade="all, delete-orphan"
+    )
+
+
+class IRStatusHistory(Base):
+    __tablename__ = "ir_status_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ir_id: Mapped[int] = mapped_column(ForeignKey("inventory_receive.id"), nullable=False)
+    from_status: Mapped[Optional[str]] = mapped_column(String(80))
+    to_status: Mapped[str] = mapped_column(String(80), nullable=False)
+    changed_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    inventory_receive: Mapped["InventoryReceive"] = relationship(back_populates="status_history")
+    changed_by: Mapped["AppUser"] = relationship(
+        back_populates="ir_status_changes", foreign_keys=[changed_by_id]
+    )
+
+
+class RNStatusHistory(Base):
+    __tablename__ = "rn_status_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rn_id: Mapped[int] = mapped_column(ForeignKey("return_notes.id"), nullable=False)
+    from_status: Mapped[Optional[str]] = mapped_column(String(80))
+    to_status: Mapped[str] = mapped_column(String(80), nullable=False)
+    changed_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    return_note: Mapped["ReturnNote"] = relationship(back_populates="status_history")
+    changed_by: Mapped["AppUser"] = relationship(
+        back_populates="rn_status_changes", foreign_keys=[changed_by_id]
+    )
 
 
 class BudgetTransaction(Base):

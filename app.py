@@ -33,6 +33,12 @@ from po_ui import render_po_workspace
 from pr_ui import render_pr_workspace
 from ir_ui import render_ir_workspace
 from rn_ui import render_rn_workspace
+from pms_ui import (
+    inject_pms_button_styles,
+    inject_pms_input_field_styles,
+    inject_pms_page_background,
+    pms_button_mark,
+)
 from seed import seed_if_empty
 from user_management import render_user_management
 
@@ -43,6 +49,9 @@ def _menu_dict(session: Session, role_id: int) -> dict:
 
 def _app_shell_css() -> None:
     """Hide sidebar; optional top spacing for main app (after login)."""
+    inject_pms_page_background()
+    inject_pms_button_styles()
+    inject_pms_input_field_styles()
     st.markdown(
         """
 <style>
@@ -247,7 +256,8 @@ def main() -> None:
         with top_user:
             st.markdown(f"**{user.email}** · _{user.role.role_name.replace('_', ' ')}_")
         with top_out:
-            if st.button("Log out", key="pms_logout_top", use_container_width=True):
+            pms_button_mark("danger")
+            if st.button("Log out", key="pms_logout_top", use_container_width=True, type="secondary"):
                 clear_auth_session()
                 st.rerun()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -11,7 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from models import AppUser, InventoryReceive, PurchaseOrder, PurchaseRequest, PurchaseRequestItem
 from pr_ui import SS_PR_ID, SS_SCREEN
-from utils import list_row_matches_filter, next_document_number
+from utils import list_row_matches_filter, log_ir_status_change, next_document_number
 
 
 def _requester_display(pr: PurchaseRequest | None) -> str:
@@ -101,6 +102,34 @@ def _po_line_rows(po: PurchaseOrder) -> List[Dict[str, Any]]:
 
 _PO_GROUP_COLUMNS = ["PO", "PR", "Purchasing round", "PO status", "Requester", "Supplier"]
 
+# Match PR workspace header purple
+_PO_LIST_PURPLE = "#4b2e83"
+
+
+def _po_list_purple_header_html(label: str) -> str:
+    return (
+        f'<div style="background:{_PO_LIST_PURPLE};color:#fff;padding:6px 8px;'
+        f'border-radius:6px;font-weight:600;text-align:center;font-size:0.9rem;">{html.escape(label)}</div>'
+    )
+
+
+def _po_dataframe_purple_header_styler(df: pd.DataFrame) -> Any:
+    """Purple header row, default (black) body text — for grouped PO list dataframes."""
+    return df.style.set_table_styles(
+        [
+            {
+                "selector": "thead th",
+                "props": [
+                    ("background-color", _PO_LIST_PURPLE),
+                    ("color", "white"),
+                    ("font-weight", "600"),
+                    ("padding", "6px 8px"),
+                    ("border", "1px solid #3d2566"),
+                ],
+            },
+        ]
+    )
+
 
 def _purchasing_round_filter_options(pos: List[PurchaseOrder]) -> List[str]:
     labels: set[str] = set()
@@ -157,6 +186,8 @@ def _try_create_ir_for_po(session: Session, user: AppUser, po_id: int) -> tuple[
         updated_at=datetime.utcnow(),
     )
     session.add(ir)
+    session.flush()
+    log_ir_status_change(session, ir.id, None, "open", user.id)
     session.commit()
     return True, ir.ir_number, ir.id
 
@@ -165,7 +196,7 @@ def _render_po_dataframe_grouped(df: pd.DataFrame, group_col: str) -> None:
     cfg = _po_line_column_config()
     if group_col == "None":
         st.dataframe(
-            df,
+            _po_dataframe_purple_header_styler(df),
             hide_index=True,
             use_container_width=True,
             column_config=cfg,
@@ -182,7 +213,7 @@ def _render_po_dataframe_grouped(df: pd.DataFrame, group_col: str) -> None:
         with st.expander(f"{group_col}: **{title}** ({len(chunk)} line(s))", expanded=expand):
             disp = chunk.drop(columns=["_g", group_col], errors="ignore").reset_index(drop=True)
             st.dataframe(
-                disp,
+                _po_dataframe_purple_header_styler(disp),
                 hide_index=True,
                 use_container_width=True,
                 column_config=cfg,
@@ -289,30 +320,29 @@ def render_po_workspace(session: Session, user: AppUser, menu_rows: dict) -> Non
         )
         hdr_w = [0.68, 0.68, 0.92, 0.58, 0.74, 0.34, 1.02, 0.38, 0.44, 0.48, 0.76, 1.12]
         h = st.columns(hdr_w)
-        for i, lab in enumerate(
-            [
-                "PO",
-                "PR",
-                "Round",
-                "PO status",
-                "Requester",
-                "#",
-                "Description",
-                "Qty",
-                "Unit",
-                "Subtotal",
-                "Supplier",
-                "Actions",
-            ]
-        ):
-            h[i].markdown(f"**{lab}**")
+        po_hdr_labels = [
+            "PO",
+            "PR",
+            "Round",
+            "PO status",
+            "Requester",
+            "#",
+            "Description",
+            "Qty",
+            "Unit",
+            "Subtotal",
+            "Supplier",
+            "Actions",
+        ]
+        for i, lab in enumerate(po_hdr_labels):
+            h[i].markdown(_po_list_purple_header_html(lab), unsafe_allow_html=True)
 
         for i, row in enumerate(line_rows):
             po_id = int(row["po_id"])
             existing = ir_by_po.get(po_id)
             cols = st.columns(hdr_w)
-            cols[0].markdown(row["PO"])
-            cols[1].markdown(row["PR"])
+            cols[0].markdown(html.escape(str(row["PO"] if row["PO"] is not None else "—")))
+            cols[1].markdown(html.escape(str(row["PR"] if row["PR"] is not None else "—")))
             cols[2].markdown(row["Purchasing round"])
             cols[3].markdown(row["PO status"])
             cols[4].markdown(row["Requester"])

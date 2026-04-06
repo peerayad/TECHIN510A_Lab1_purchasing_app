@@ -25,6 +25,8 @@ from models import (
 from database import clear_all_procurement_documents
 from utils import validate_email_format as vef
 
+from pms_ui import pms_button_mark
+
 PR_TABLE = "purchase_requests"
 PR_FIELDS = [
     "pr_number",
@@ -65,7 +67,8 @@ def _tab_data_maintenance(session: Session) -> None:
         "Users, classes, teams, suppliers, and settings are **not** removed."
     )
     if st.checkbox("I understand this cannot be undone.", key="um_clear_proc_confirm"):
-        if st.button("Delete all PR / PO / IR / RN", type="primary", key="um_clear_proc_run"):
+        pms_button_mark("danger")
+        if st.button("Delete all PR / PO / IR / RN", type="secondary", key="um_clear_proc_run"):
             clear_all_procurement_documents(session)
             st.success("All procurement documents were cleared. You can create new requests.")
             st.rerun()
@@ -89,7 +92,8 @@ def _tab_students(session: Session) -> None:
             ]
         )
         ed = st.data_editor(df, disabled=["id", "email", "student_id"], hide_index=True, use_container_width=True)
-        if st.button("Save student changes"):
+        pms_button_mark("draft")
+        if st.button("Save student changes", type="secondary"):
             for _, row in ed.iterrows():
                 s = session.get(StudentList, int(row["id"]))
                 if s:
@@ -149,7 +153,8 @@ def _tab_users(session: Session) -> None:
             )
         with c2:
             active = st.checkbox("Active", value=u.is_active, key=f"ua_{u.id}")
-        if st.button("Save user", key=f"us_{u.id}"):
+        pms_button_mark("draft")
+        if st.button("Save user", key=f"us_{u.id}", type="secondary"):
             u.role_id = role_map[new_r]
             u.is_active = active
             session.commit()
@@ -165,7 +170,7 @@ def _tab_users(session: Session) -> None:
     new_em = st.text_input("Login email (often same as student email)")
     pw = st.text_input("Password", type="password")
     rname = st.selectbox("Role", list(role_map.keys()), key="new_ur")
-    if st.button("Create user"):
+    if st.button("Create user", type="primary"):
         em = new_em.strip() or session.get(StudentList, sl_map[pick]).email
         if not pw or len(pw) < 4:
             st.error("Password required (min 4 chars).")
@@ -210,7 +215,8 @@ def _tab_permissions(session: Session) -> None:
         use_container_width=True,
         key=f"perm_{sel.id}",
     )
-    if st.button("Save permissions", key=f"savep_{sel.id}"):
+    pms_button_mark("draft")
+    if st.button("Save permissions", key=f"savep_{sel.id}", type="secondary"):
         for _, row in ed.iterrows():
             fn = row["field_name"]
             p = session.query(Permission).filter_by(role_id=sel.id, table_name=PR_TABLE, field_name=fn).first()
@@ -262,7 +268,8 @@ def _master_suppliers(session: Session) -> None:
             ]
         )
         ed = st.data_editor(df, disabled=["id"], hide_index=True, use_container_width=True)
-        if st.button("Save suppliers"):
+        pms_button_mark("draft")
+        if st.button("Save suppliers", type="secondary"):
             for _, row in ed.iterrows():
                 s = session.get(Supplier, int(row["id"]))
                 if s:
@@ -289,7 +296,8 @@ def _master_classes(session: Session) -> None:
             ]
         )
         ed = st.data_editor(df, disabled=["id"], hide_index=True, use_container_width=True)
-        if st.button("Save classes"):
+        pms_button_mark("draft")
+        if st.button("Save classes", type="secondary"):
             for _, row in ed.iterrows():
                 c = session.get(Class, int(row["id"]))
                 if c:
@@ -323,7 +331,8 @@ def _master_teams(session: Session) -> None:
             ]
         )
         ed = st.data_editor(df, disabled=["id"], hide_index=True, use_container_width=True)
-        if st.button("Save teams"):
+        pms_button_mark("draft")
+        if st.button("Save teams", type="secondary"):
             for _, row in ed.iterrows():
                 t = session.get(Team, int(row["id"]))
                 if t:
@@ -364,7 +373,8 @@ def _master_team_members(session: Session) -> None:
     cur: Set[int] = {m.team_id for m in session.query(TeamMembership).filter_by(user_id=u.id).all()}
     default = [lb for lb, tid in team_rows if tid in cur]
     chosen = st.multiselect("Teams", options=labels_t, default=default, key=f"tm_{u.id}")
-    if st.button("Save memberships", key=f"tms_{u.id}"):
+    pms_button_mark("draft")
+    if st.button("Save memberships", key=f"tms_{u.id}", type="secondary"):
         session.query(TeamMembership).filter_by(user_id=u.id).delete(synchronize_session=False)
         now = datetime.utcnow()
         for lb in chosen:
@@ -390,7 +400,8 @@ def _master_rounds(session: Session) -> None:
             ]
         )
         ed = st.data_editor(df, disabled=["id"], hide_index=True, use_container_width=True)
-        if st.button("Save rounds"):
+        pms_button_mark("draft")
+        if st.button("Save rounds", type="secondary"):
             for _, row in ed.iterrows():
                 r = session.get(PurchasingRound, int(row["id"]))
                 if r:

@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session, joinedload
 from models import AppUser, Class, Team
 from utils import class_available_budget, net_budget_reserved_for_class, team_budget_cap_remaining
 
+from pms_ui import pms_button_mark
+
 
 def _can_access_budget_management(user: AppUser) -> bool:
     return user.role.is_master or user.role.role_name == "head_of_purchasing"
@@ -283,7 +285,8 @@ def _tab_team_budgets(session: Session) -> None:
             pass
     st.caption(f"Sum of assigned team budgets (from table): **{sum_teams:,.2f}** (may differ from class cap).")
 
-    if st.button("Save team budgets for this class", type="primary", key="budget_save_teams"):
+    pms_button_mark("draft")
+    if st.button("Save team budgets for this class", type="secondary", key="budget_save_teams"):
         amount_by_code: dict[str, float] = {}
         for _, row in edited.iterrows():
             lab = row.get("Team")

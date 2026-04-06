@@ -136,7 +136,7 @@ footer[data-testid="stFooter"] {
 form[data-testid="stForm"] button[type="submit"],
 [data-testid="stFormSubmitButton"] button {
   background-color: #F7DC6F !important;
-  color: #ffffff !important;
+  color: #1a1a1a !important;
   border: none !important;
   width: 100% !important;
   font-family: system-ui, -apple-system, sans-serif !important;
@@ -149,7 +149,7 @@ form[data-testid="stForm"] button[type="submit"],
 form[data-testid="stForm"] button[type="submit"]:hover,
 [data-testid="stFormSubmitButton"] button:hover {
   background-color: #e8cf66 !important;
-  color: #ffffff !important;
+  color: #1a1a1a !important;
 }
 [data-testid="stNotificationContentError"],
 [data-testid="stAlert"] {

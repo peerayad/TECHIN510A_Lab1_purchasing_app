@@ -470,3 +470,7 @@ def _seed_data(session: Session) -> None:
     dn_po.last_number = max(dn_po.last_number, len(appr_lines))
     dn_ir = session.query(DocumentNumbering).filter_by(document_type="IR").one()
     dn_ir.last_number = max(dn_ir.last_number, 1)
+
+    # Data integrity: seed must always create the five workflow roles (see roles_data above).
+    seeded_roles = session.query(Role).count()
+    assert seeded_roles == 5, f"Expected 5 seeded roles, got {seeded_roles}"

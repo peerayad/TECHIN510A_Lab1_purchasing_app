@@ -15,6 +15,7 @@ from models import (
     Class,
     DocumentStatus,
     Message,
+    PRStatusHistory,
     PurchaseOrder,
     PurchaseRequest,
     PurchaseRequestItem,
@@ -26,7 +27,7 @@ from models import (
     TeamMembership,
 )
 from utils import (
-    class_available_budget,
+    list_row_matches_filter,
     log_pr_status_change,
     net_budget_reserved_for_class,
     next_document_number,
@@ -42,8 +43,72 @@ SS_SCREEN = "pr_workspace_screen"
 SS_PR_ID = "pr_workspace_pr_id"
 SS_PR_LIST_DF = "pr_list_selection_df"
 
+# PO statuses that no longer block creating another PO for the same PR line.
+_PO_STATUSES_ALLOW_NEW_FROM_PR = frozenset({"rejected", "cancelled"})
+
+
+def _po_status_blocks_create(status: str) -> bool:
+    return (status or "").strip().lower() not in _PO_STATUSES_ALLOW_NEW_FROM_PR
+
+
+def _active_po_for_pr_line_item(session: Session, pr_id: int, item_id: int) -> Optional[PurchaseOrder]:
+    """Line-specific PO first; else legacy whole-PR PO (pr_line_item_id NULL) applies to all lines."""
+    for po in (
+        session.query(PurchaseOrder)
+        .filter_by(pr_id=pr_id, pr_line_item_id=item_id)
+        .order_by(PurchaseOrder.id.desc())
+        .all()
+    ):
+        if _po_status_blocks_create(po.status):
+            return po
+    for po in (
+        session.query(PurchaseOrder)
+        .filter_by(pr_id=pr_id)
+        .filter(PurchaseOrder.pr_line_item_id.is_(None))
+        .order_by(PurchaseOrder.id.desc())
+        .all()
+    ):
+        if _po_status_blocks_create(po.status):
+            return po
+    return None
+
+
+def _po_number_for_pr_line_item(session: Session, pr_id: int, item_id: int) -> str:
+    """Active PO number for this PR line, or —."""
+    b = _active_po_for_pr_line_item(session, pr_id, item_id)
+    return b.po_number if b else "—"
+
+
+def _create_po_for_pr_line(session: Session, user: AppUser, pr: PurchaseRequest, it: PurchaseRequestItem) -> None:
+    if pr.status != "approved":
+        return
+    if it.approver_decision == "rejected":
+        return
+    if _active_po_for_pr_line_item(session, pr.id, it.id) is not None:
+        return
+    session.add(
+        PurchaseOrder(
+            po_number=next_document_number(session, "PO"),
+            pr_id=pr.id,
+            pr_line_item_id=it.id,
+            purchasing_team_id=user.id,
+            status="open",
+            created_at=datetime.utcnow(),
+        )
+    )
+    session.commit()
+
+
 # Column weights: Item | Description | Qty | Unit price | Sub total | Supplier | Link | Approve
 _LINE_COLS = [0.38, 2.0, 0.52, 0.58, 0.62, 1.05, 1.0, 0.95]
+# PR detail: PO no., optional Create PO / Cancel PO columns, then Approve when present.
+_LINE_COLS_PO = [0.34, 1.62, 0.48, 0.54, 0.56, 0.92, 0.78, 0.48, 0.78]
+_LINE_COLS_PO_CREATE = [0.31, 1.46, 0.44, 0.50, 0.52, 0.84, 0.68, 0.40, 0.48, 0.68]
+_LINE_COLS_PO_CANCEL = [0.32, 1.5, 0.46, 0.52, 0.54, 0.88, 0.72, 0.44, 0.52, 0.72]
+_LINE_COLS_PO_CREATE_CANCEL = [0.28, 1.32, 0.40, 0.46, 0.48, 0.78, 0.64, 0.38, 0.44, 0.44, 0.62]
+_LINE_COLS_PO_NO_APR = [0.36, 1.78, 0.5, 0.54, 0.58, 0.96, 0.86, 0.5]
+# Draft form: same as above minus Approve column, plus narrow Remove
+_FORM_LINE_COLS = _LINE_COLS[:-1] + [0.36]
 
 
 def _pr_theme_css() -> None:
@@ -75,11 +140,42 @@ div[data-testid="column"]:has(.pr-th) { background: transparent !important; }
     )
 
 
-def _line_table_header(*, show_approve: bool) -> None:
+def _line_table_header(
+    *,
+    show_approve: bool,
+    show_row_delete: bool = False,
+    show_po_no: bool = False,
+    show_create_po: bool = False,
+    show_cancel_po: bool = False,
+) -> None:
     labels = ["Item", "Description", "Qty", "Unit price", "Sub total", "Supplier", "Link"]
+    if show_po_no:
+        labels.append("PO no.")
+    if show_create_po:
+        labels.append("Create PO")
+    if show_cancel_po:
+        labels.append("Cancel PO")
+    if show_row_delete:
+        labels.append("Remove")
     if show_approve:
         labels.append("Approve")
-    cols = st.columns(_LINE_COLS if show_approve else _LINE_COLS[:-1])
+    if show_row_delete:
+        weights = _FORM_LINE_COLS
+    elif show_po_no and show_approve and show_create_po and show_cancel_po:
+        weights = _LINE_COLS_PO_CREATE_CANCEL
+    elif show_po_no and show_approve and show_create_po:
+        weights = _LINE_COLS_PO_CREATE
+    elif show_po_no and show_approve and show_cancel_po:
+        weights = _LINE_COLS_PO_CANCEL
+    elif show_po_no and show_approve:
+        weights = _LINE_COLS_PO
+    elif show_po_no and not show_approve:
+        weights = _LINE_COLS_PO_NO_APR
+    elif show_approve:
+        weights = _LINE_COLS
+    else:
+        weights = _LINE_COLS[:-1]
+    cols = st.columns(weights)
     for i, lab in enumerate(labels):
         extra = " pr-th-left" if i == 1 else ""
         cols[i].markdown(f'<div class="pr-th{extra}">{lab}</div>', unsafe_allow_html=True)
@@ -100,6 +196,10 @@ def get_pr_actions(session: Session, role_id: int, status_code: str) -> List[Sta
     )
 
 
+def _user_has_pr_action(session: Session, role_id: int, status_code: str, action_key: str) -> bool:
+    return any(sap.action_key == action_key for sap in get_pr_actions(session, role_id, status_code))
+
+
 def _restrict_class_team(user: AppUser) -> bool:
     return user.role.role_name == "requester" and not user.role.is_master
 
@@ -117,12 +217,27 @@ def _team_budget_exceeds(session: Session, team_id: int, amount: float, ex: Opti
     return float(amount) > rem + _team_eps(), rem
 
 
+def _pr_submit_budget_error(session: Session, pr: PurchaseRequest, team_id: int) -> Optional[str]:
+    """If PR cannot be submitted due to team remaining budget, return a user-facing message."""
+    bad, rem = _team_budget_exceeds(session, team_id, pr.budget_amount, pr.id)
+    if bad:
+        return (
+            f"Cannot submit: this PR total **{pr.budget_amount:,.2f}** is greater than this team’s remaining budget "
+            f"**{rem:,.2f}**. Lower line totals or ask an admin to raise the team’s assigned budget."
+        )
+    return None
+
+
 def _can_approver(user: AppUser) -> bool:
     return user.role.is_master or user.role.role_name == "approver"
 
 
 def _can_hop(user: AppUser) -> bool:
     return user.role.is_master or user.role.role_name == "head_of_purchasing"
+
+
+def _can_cancel_blocking_po(user: AppUser) -> bool:
+    return user.role.is_master or user.role.role_name == "purchasing_team"
 
 
 def _status_badge(session: Session, doc_type: str, code: str) -> str:
@@ -212,30 +327,60 @@ def _render_list(session: Session, user: AppUser, own_only: bool) -> None:
     if not prs:
         st.info("No purchase requests.")
     else:
-        df = pd.DataFrame(
-            [
-                {"PR": p.pr_number, "Status": p.status, "Budget": f"{p.budget_amount:.2f}"}
-                for p in prs
-            ]
-        )
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            key=SS_PR_LIST_DF,
-        )
-        ev = st.session_state.get(SS_PR_LIST_DF)
-        for raw in _pr_list_selected_indices(ev):
-            try:
-                idx = int(raw)
-            except (TypeError, ValueError):
-                continue
-            if 0 <= idx < len(prs):
-                _go_detail(prs[idx].id)
-                st.rerun()
-            break
+        statuses = sorted({p.status for p in prs})
+        fc1, fc2 = st.columns([2.2, 1])
+        with fc1:
+            search = st.text_input(
+                "Search",
+                "",
+                key="pr_list_search_q",
+                placeholder="PR number, status, budget…",
+            )
+        with fc2:
+            status_pick = st.selectbox(
+                "Status",
+                ["All"] + statuses,
+                key="pr_list_status_f",
+            )
+        filtered = [
+            p
+            for p in prs
+            if list_row_matches_filter(
+                search,
+                status_pick,
+                p.status,
+                p.pr_number,
+                p.status,
+                f"{p.budget_amount:.2f}",
+            )
+        ]
+        if not filtered:
+            st.info("No purchase requests match your search or status filter.")
+        else:
+            df = pd.DataFrame(
+                [
+                    {"PR": p.pr_number, "Status": p.status, "Budget": f"{p.budget_amount:.2f}"}
+                    for p in filtered
+                ]
+            )
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row",
+                key=SS_PR_LIST_DF,
+            )
+            ev = st.session_state.get(SS_PR_LIST_DF)
+            for raw in _pr_list_selected_indices(ev):
+                try:
+                    idx = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= idx < len(filtered):
+                    _go_detail(filtered[idx].id)
+                    st.rerun()
+                break
     if user.role.role_name == "requester" or user.role.is_master:
         if st.button("New purchase request"):
             st.session_state[SS_SCREEN] = "form"
@@ -390,11 +535,11 @@ def _render_form(session: Session, user: AppUser) -> None:
     lines_data: List[Dict[str, Any]] = []
     total = 0.0
     st.markdown("#### Line items")
-    _line_table_header(show_approve=False)
-    w = _LINE_COLS[:-1]
+    _line_table_header(show_approve=False, show_row_delete=True)
+    w = _FORM_LINE_COLS
     for idx, row in enumerate(line_meta, start=1):
         rid_ = row["rid"]
-        c0, c1, c2, c3, c4, c5, c6 = st.columns(w)
+        c0, c1, c2, c3, c4, c5, c6, c7 = st.columns(w)
         c0.markdown(f"<div style='text-align:center;padding-top:0.35rem'>{idx}</div>", unsafe_allow_html=True)
         with c1:
             desc = st.text_input("d", key=f"pl_{rid_}_desc", label_visibility="collapsed", placeholder="Description")
@@ -416,6 +561,21 @@ def _render_form(session: Session, user: AppUser) -> None:
             sl = st.selectbox("s", sup_labels, key=sk, label_visibility="collapsed")
         with c6:
             link = st.text_input("l", key=f"pl_{rid_}_link", label_visibility="collapsed", placeholder="URL")
+        with c7:
+            if len(line_meta) > 1:
+                if st.button("Remove", key=f"pr_rm_line_{rid_}", use_container_width=True):
+                    for k in (
+                        f"pl_{rid_}_desc",
+                        f"pl_{rid_}_qty",
+                        f"pl_{rid_}_price",
+                        f"pl_{rid_}_link",
+                        f"pl_{rid_}_sup",
+                    ):
+                        st.session_state.pop(k, None)
+                    st.session_state["pr_line_rows"] = [r for r in line_meta if r["rid"] != rid_]
+                    st.rerun()
+            else:
+                st.caption("—")
         lines_data.append(
             {"description": desc, "qty": qty, "unit_price": price, "supplier_id": sup_map[sl], "link": link}
         )
@@ -537,12 +697,12 @@ def _persist_pr(
             st.error(f"Exceeds team budget. Remaining {rem:,.2f}.")
             return
     if submit:
-        avail = class_available_budget(session, pr.class_id)
-        if avail < float(pr.budget_amount):
+        budget_err = _pr_submit_budget_error(session, pr, tid)
+        if budget_err:
             session.rollback()
             if created:
                 st.session_state.pop(SS_PR_ID, None)
-            st.error("Insufficient class budget.")
+            st.error(budget_err)
             return
         old = pr.status
         pr.status = "submitted"
@@ -556,6 +716,45 @@ def _persist_pr(
     st.rerun()
 
 
+def _reject_pr_document(session: Session, pr: PurchaseRequest, user: AppUser) -> None:
+    old = pr.status
+    pr.status = "rejected"
+    record_pr_budget_return(session, pr)
+    for li in pr.items:
+        li.approver_decision = None
+        li.hop_approved = False
+    pr.updated_at = datetime.utcnow()
+    log_pr_status_change(session, pr.id, old, pr.status, user.id)
+    session.commit()
+
+
+def _hop_return_to_approver(session: Session, pr: PurchaseRequest, user: AppUser) -> None:
+    """Cancel HoP step: back to submitted so line approvers can decide again."""
+    old = pr.status
+    pr.status = "submitted"
+    pr.updated_at = datetime.utcnow()
+    for li in pr.items:
+        li.approver_decision = None
+        li.hop_approved = False
+    log_pr_status_change(session, pr.id, old, pr.status, user.id)
+    session.commit()
+
+
+def _hop_reject_line(session: Session, pr: PurchaseRequest, it: PurchaseRequestItem, user: AppUser) -> None:
+    """HoP rejects one previously approver-approved line; clears HoP flags on other lines."""
+    it.approver_decision = "rejected"
+    it.hop_approved = False
+    for li in pr.items:
+        if li.id != it.id:
+            li.hop_approved = False
+    pr.updated_at = datetime.utcnow()
+    all_items = session.query(PurchaseRequestItem).filter_by(pr_id=pr.id).all()
+    if all(l.approver_decision == "rejected" for l in all_items):
+        _reject_pr_document(session, pr, user)
+    else:
+        session.commit()
+
+
 def _apply_workflow(session: Session, user: AppUser, pr: PurchaseRequest, sap: StatusActionPermission) -> None:
     if sap.action_key == "delete":
         session.delete(pr)
@@ -564,26 +763,36 @@ def _apply_workflow(session: Session, user: AppUser, pr: PurchaseRequest, sap: S
         st.rerun()
         return
     if sap.action_key == "create_po":
-        session.add(
-            PurchaseOrder(
-                po_number=next_document_number(session, "PO"),
-                pr_id=pr.id,
-                purchasing_team_id=user.id,
-                status="open",
-                created_at=datetime.utcnow(),
+        eligible = [
+            it
+            for it in sorted(pr.items, key=lambda x: x.item_no)
+            if it.approver_decision != "rejected" and _active_po_for_pr_line_item(session, pr.id, it.id) is None
+        ]
+        if not eligible:
+            st.error(
+                "No lines need a new PO. Eligible lines already have an active PO, or every line is rejected."
             )
-        )
+            return
+        for it in eligible:
+            session.add(
+                PurchaseOrder(
+                    po_number=next_document_number(session, "PO"),
+                    pr_id=pr.id,
+                    pr_line_item_id=it.id,
+                    purchasing_team_id=user.id,
+                    status="open",
+                    created_at=datetime.utcnow(),
+                )
+            )
         session.commit()
         st.rerun()
         return
-    old = pr.status
     if sap.action_key == "reject" or sap.next_status == "rejected":
-        pr.status = "rejected"
-        record_pr_budget_return(session, pr)
-        for li in pr.items:
-            li.approver_decision = None
-            li.hop_approved = False
-    elif sap.next_status:
+        _reject_pr_document(session, pr, user)
+        st.rerun()
+        return
+    old = pr.status
+    if sap.next_status:
         pr.status = sap.next_status
     pr.updated_at = datetime.utcnow()
     log_pr_status_change(session, pr.id, old, pr.status, user.id)
@@ -624,8 +833,27 @@ def _render_detail(session: Session, user: AppUser) -> None:
     st.markdown(f"## Purchase Request `{pr.pr_number}`")
     st.markdown(_status_badge(session, "PR", pr.status), unsafe_allow_html=True)
 
+    if pr.status == "reviewed" and _can_hop(user):
+        st.caption(
+            "Head of Purchasing: **Cancel review** sends the PR back to line approvers; **Reject entire PR** ends it and "
+            "releases budget; **N** on a line rejects that line (if every line is rejected, the PR is rejected)."
+        )
+        h1, h2 = st.columns(2)
+        with h1:
+            if st.button("Cancel review → return to approver", key=f"pr_hop_return_{pr.id}", type="secondary"):
+                _hop_return_to_approver(session, pr, user)
+                st.rerun()
+        with h2:
+            if st.button("Reject entire PR", key=f"pr_hop_reject_all_{pr.id}", type="primary"):
+                _reject_pr_document(session, pr, user)
+                st.rerun()
+
     for sap in get_pr_actions(session, user.role_id, pr.status):
         if sap.action_key in ("submit", "edit"):
+            continue
+        if pr.status == "reviewed" and _can_hop(user) and sap.action_key == "reject":
+            continue
+        if sap.action_key == "create_po":
             continue
         if st.button(sap.button_label, key=f"sap_{sap.id}"):
             _apply_workflow(session, user, pr, sap)
@@ -665,6 +893,8 @@ def _render_detail(session: Session, user: AppUser) -> None:
 
     items = sorted(pr.items, key=lambda x: x.item_no)
     show_apr_col = pr.status in ("submitted", "reviewed", "approved")
+    show_create_po_col = pr.status == "approved" and _user_has_pr_action(session, user.role_id, pr.status, "create_po")
+    show_cancel_po_col = pr.status == "approved" and _can_cancel_blocking_po(user)
 
     st.markdown("#### Line items")
     if pr.status == "submitted" and _can_approver(user):
@@ -690,8 +920,23 @@ def _render_detail(session: Session, user: AppUser) -> None:
                 session.commit()
                 st.rerun()
 
-    _line_table_header(show_approve=show_apr_col)
-    w = _LINE_COLS if show_apr_col else _LINE_COLS[:-1]
+    _line_table_header(
+        show_approve=show_apr_col,
+        show_po_no=True,
+        show_create_po=show_create_po_col,
+        show_cancel_po=show_cancel_po_col,
+    )
+    if show_apr_col:
+        if show_create_po_col and show_cancel_po_col:
+            w = _LINE_COLS_PO_CREATE_CANCEL
+        elif show_create_po_col:
+            w = _LINE_COLS_PO_CREATE
+        elif show_cancel_po_col:
+            w = _LINE_COLS_PO_CANCEL
+        else:
+            w = _LINE_COLS_PO
+    else:
+        w = _LINE_COLS_PO_NO_APR
 
     for it in items:
         cols = st.columns(w)
@@ -702,10 +947,48 @@ def _render_detail(session: Session, user: AppUser) -> None:
         cols[4].markdown(f"<div style='text-align:center'>{it.sub_total:.2f}</div>", unsafe_allow_html=True)
         cols[5].markdown(it.supplier.supplier_name if it.supplier else "—")
         cols[6].markdown(it.link or "—")
+        ci = 7
+        cols[ci].markdown(
+            f"<div style='text-align:center;padding-top:0.2rem'>{_po_number_for_pr_line_item(session, pr.id, it.id)}</div>",
+            unsafe_allow_html=True,
+        )
+        ci += 1
+        if show_create_po_col:
+            ccr = cols[ci]
+            if it.approver_decision == "rejected":
+                ccr.caption("—")
+            elif _active_po_for_pr_line_item(session, pr.id, it.id) is not None:
+                ccr.caption("—")
+            else:
+                if ccr.button(
+                    "Create PO",
+                    key=f"pr_create_po_line_{pr.id}_{it.id}",
+                    use_container_width=True,
+                    type="primary",
+                ):
+                    _create_po_for_pr_line(session, user, pr, it)
+                    st.rerun()
+            ci += 1
+        if show_cancel_po_col:
+            cpo = cols[ci]
+            line_po = _active_po_for_pr_line_item(session, pr.id, it.id)
+            if line_po and _po_status_blocks_create(line_po.status):
+                if cpo.button(
+                    "Cancel PO",
+                    key=f"pr_cancel_po_line_{pr.id}_{it.id}",
+                    use_container_width=True,
+                    type="secondary",
+                ):
+                    line_po.status = "cancelled"
+                    session.commit()
+                    st.rerun()
+            else:
+                cpo.caption("—")
+            ci += 1
         ad = it.approver_decision
         hd = it.hop_approved
         if show_apr_col:
-            ac = cols[7]
+            ac = cols[ci]
             if pr.status == "submitted" and _can_approver(user):
                 if ad is None:
                     y1, y2 = ac.columns(2)
@@ -727,7 +1010,8 @@ def _render_detail(session: Session, user: AppUser) -> None:
                     ac.caption("✓ Yes" if ad == "approved" else "✗ No")
             elif pr.status == "reviewed" and _can_hop(user) and ad == "approved":
                 if not hd:
-                    if ac.button("HoP ✓", key=f"hy_{pr.id}_{it.id}", use_container_width=True):
+                    hy1, hy2 = ac.columns(2)
+                    if hy1.button("Y", key=f"hy_{pr.id}_{it.id}", use_container_width=True):
                         it.hop_approved = True
                         pr.updated_at = datetime.utcnow()
                         if _maybe_reviewed_to_approved(session, pr, user):
@@ -735,8 +1019,11 @@ def _render_detail(session: Session, user: AppUser) -> None:
                             st.rerun()
                         session.commit()
                         st.rerun()
+                    if hy2.button("N", key=f"hn_{pr.id}_{it.id}", use_container_width=True):
+                        _hop_reject_line(session, pr, it, user)
+                        st.rerun()
                 else:
-                    ac.caption("HoP OK")
+                    ac.caption("✓ Yes")
             elif pr.status == "reviewed" and ad == "rejected":
                 ac.caption("—")
             else:
@@ -750,6 +1037,33 @@ def _render_detail(session: Session, user: AppUser) -> None:
     tot_cols[4].markdown(f"**{pr.budget_amount:.2f}**")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("### Status log")
+    hist_rows = (
+        session.query(PRStatusHistory, AppUser, StudentList)
+        .join(AppUser, PRStatusHistory.changed_by_id == AppUser.id)
+        .join(StudentList, AppUser.student_list_id == StudentList.id)
+        .filter(PRStatusHistory.pr_id == pr.id)
+        .order_by(PRStatusHistory.created_at)
+        .all()
+    )
+    if not hist_rows:
+        st.caption("No status changes recorded yet.")
+    else:
+        log_table: List[Dict[str, str]] = []
+        for h, actor, stud in hist_rows:
+            actor_name = f"{stud.first_name} {stud.last_name}".strip() or actor.email
+            ts = h.created_at.strftime("%Y-%m-%d %H:%M UTC") if h.created_at else "—"
+            prev = h.from_status if h.from_status else "—"
+            log_table.append(
+                {
+                    "When (UTC)": ts,
+                    "By": actor_name,
+                    "From": prev,
+                    "To": h.to_status,
+                }
+            )
+        st.dataframe(pd.DataFrame(log_table), hide_index=True, use_container_width=True)
 
     st.markdown("### Messages")
     msg_rows = (

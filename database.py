@@ -69,6 +69,18 @@ def migrate_sqlite_schema() -> None:
                     conn.execute(
                         text("ALTER TABLE inventory_receive ADD COLUMN pickup_ready INTEGER NOT NULL DEFAULT 0")
                     )
+                if "requester_accepted_at" not in ic:
+                    conn.execute(text("ALTER TABLE inventory_receive ADD COLUMN requester_accepted_at DATETIME"))
+                if "requester_accepted_by_id" not in ic:
+                    conn.execute(text("ALTER TABLE inventory_receive ADD COLUMN requester_accepted_by_id INTEGER"))
+                if "requester_accepted_at" in ir_cols():
+                    conn.execute(
+                        text(
+                            "UPDATE inventory_receive SET status = 'closed' "
+                            "WHERE requester_accepted_at IS NOT NULL "
+                            "AND (status IS NULL OR LOWER(TRIM(CAST(status AS TEXT))) = 'open')"
+                        )
+                    )
 
             if "return_notes" in tables:
                 def rn_cols() -> set[str]:
@@ -89,6 +101,18 @@ def migrate_sqlite_schema() -> None:
                 if "team_budget_amount" not in team_cols():
                     conn.execute(
                         text("ALTER TABLE teams ADD COLUMN team_budget_amount REAL NOT NULL DEFAULT 0")
+                    )
+
+            if "purchase_orders" in tables:
+                def po_cols() -> set[str]:
+                    return {str(r[1]) for r in conn.execute(text("PRAGMA table_info(purchase_orders)")).fetchall()}
+
+                if "pr_line_item_id" not in po_cols():
+                    conn.execute(
+                        text(
+                            "ALTER TABLE purchase_orders ADD COLUMN pr_line_item_id INTEGER "
+                            "REFERENCES purchase_request_items (id)"
+                        )
                     )
 
             if "team_members" not in tables:
@@ -160,4 +184,118 @@ def ensure_budget_management_menu(session: Session) -> None:
                 created_at=datetime.utcnow(),
             )
         )
+    session.commit()
+
+
+def ensure_ir_closed_document_status(session: Session) -> None:
+    """Add IR status 'closed' (label Closed) for DBs seeded before that status existed."""
+    from models import DocumentStatus
+
+    exists = (
+        session.query(DocumentStatus)
+        .filter_by(document_type="IR", status_code="closed")
+        .first()
+    )
+    if exists:
+        return
+    session.add(
+        DocumentStatus(
+            document_type="IR",
+            status_code="closed",
+            status_label="Closed",
+            status_color="green",
+            order_sequence=2,
+            is_final=True,
+            description=None,
+        )
+    )
+    session.commit()
+
+
+def ensure_rn_workflow_permissions(session: Session) -> None:
+    """Ensure return-note workflow rows exist (older DBs may lack RN status_action_permissions)."""
+    from models import Role, StatusActionPermission
+
+    def _role(name: str):
+        return session.query(Role).filter_by(role_name=name).first()
+
+    specs = [
+        ("RN", "draft", "requester", "submit", True, "Submit for HoP approval", "submitted"),
+        ("RN", "draft", "master", "submit", True, "Submit for HoP approval", "submitted"),
+        ("RN", "submitted", "head_of_purchasing", "approve", True, "Approve", "approved"),
+        ("RN", "submitted", "master", "approve", True, "Approve", "approved"),
+        ("RN", "submitted", "head_of_purchasing", "reject", True, "Reject", "rejected"),
+        ("RN", "submitted", "master", "reject", True, "Reject", "rejected"),
+        ("RN", "approved", "requester", "complete", True, "Completed", "closed"),
+        ("RN", "approved", "master", "complete", True, "Completed", "closed"),
+        ("RN", "approved", "head_of_purchasing", "complete", True, "Completed", "closed"),
+        ("RN", "approved", "purchasing_team", "complete", True, "Completed", "closed"),
+        ("RN", "approved", "requester", "void", True, "Cancel", "rejected"),
+        ("RN", "approved", "master", "void", True, "Cancel", "rejected"),
+        ("RN", "approved", "head_of_purchasing", "void", True, "Cancel", "rejected"),
+        ("RN", "approved", "purchasing_team", "void", True, "Cancel", "rejected"),
+    ]
+    added = False
+    for dt, sc, rname, ak, allowed, label, nxt in specs:
+        role = _role(rname)
+        if not role:
+            continue
+        exists = (
+            session.query(StatusActionPermission)
+            .filter_by(
+                document_type=dt,
+                status_code=sc,
+                role_id=role.id,
+                action_key=ak,
+            )
+            .first()
+        )
+        if exists:
+            continue
+        session.add(
+            StatusActionPermission(
+                document_type=dt,
+                status_code=sc,
+                role_id=role.id,
+                action_key=ak,
+                is_allowed=allowed,
+                button_label=label,
+                next_status=nxt,
+            )
+        )
+        added = True
+    if added:
+        session.commit()
+
+
+def ensure_pr_reviewed_hop_actions(session: Session) -> None:
+    """Ensure Head of Purchasing can reject PRs in reviewed status (older DBs may lack this row)."""
+    from models import Role, StatusActionPermission
+
+    hop = session.query(Role).filter_by(role_name="head_of_purchasing").first()
+    if not hop:
+        return
+    exists = (
+        session.query(StatusActionPermission)
+        .filter_by(
+            document_type="PR",
+            status_code="reviewed",
+            role_id=hop.id,
+            action_key="reject",
+        )
+        .first()
+    )
+    if exists:
+        return
+    session.add(
+        StatusActionPermission(
+            document_type="PR",
+            status_code="reviewed",
+            role_id=hop.id,
+            action_key="reject",
+            is_allowed=True,
+            button_label="Reject PR",
+            next_status="rejected",
+        )
+    )
     session.commit()

@@ -249,6 +249,7 @@ class PurchaseRequestItem(Base):
 
     purchase_request: Mapped["PurchaseRequest"] = relationship(back_populates="items")
     supplier: Mapped["Supplier"] = relationship(back_populates="line_items")
+    line_purchase_orders: Mapped[List["PurchaseOrder"]] = relationship(back_populates="pr_line_item")
 
 
 class PurchaseOrder(Base):
@@ -257,11 +258,16 @@ class PurchaseOrder(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     po_number: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     pr_id: Mapped[int] = mapped_column(ForeignKey("purchase_requests.id"), nullable=False)
+    pr_line_item_id: Mapped[Optional[int]] = mapped_column(ForeignKey("purchase_request_items.id"), nullable=True)
     purchasing_team_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(80), default="open", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     purchase_request: Mapped["PurchaseRequest"] = relationship(back_populates="purchase_orders")
+    pr_line_item: Mapped[Optional["PurchaseRequestItem"]] = relationship(
+        back_populates="line_purchase_orders",
+        foreign_keys=[pr_line_item_id],
+    )
     purchasing_user: Mapped["AppUser"] = relationship(back_populates="purchase_orders")
     inventory_receives: Mapped[List["InventoryReceive"]] = relationship(back_populates="purchase_order")
 
@@ -281,9 +287,30 @@ class InventoryReceive(Base):
     invoice_ok: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     needs_supplier_resolution: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     pickup_ready: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    requester_accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    requester_accepted_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     purchase_order: Mapped["PurchaseOrder"] = relationship(back_populates="inventory_receives")
+    requester_acceptor: Mapped[Optional["AppUser"]] = relationship(foreign_keys=[requester_accepted_by_id])
     return_notes: Mapped[List["ReturnNote"]] = relationship(back_populates="inventory_receive")
+    attachments: Mapped[List["IRAttachment"]] = relationship(
+        back_populates="inventory_receive",
+        cascade="all, delete-orphan",
+    )
+
+
+class IRAttachment(Base):
+    __tablename__ = "ir_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ir_id: Mapped[int] = mapped_column(ForeignKey("inventory_receive.id"), nullable=False)
+    uploaded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    inventory_receive: Mapped["InventoryReceive"] = relationship(back_populates="attachments")
+    uploaded_by: Mapped["AppUser"] = relationship()
 
 
 class ReturnNote(Base):

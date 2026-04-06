@@ -251,7 +251,7 @@ def _seed_data(session: Session) -> None:
         ("PO", "success", "Success", "green", 2, True, None),
         ("PO", "rejected", "Rejected", "red", 3, True, None),
         ("IR", "open", "Open", "blue", 1, False, None),
-        ("IR", "accepted", "Accepted", "green", 2, True, None),
+        ("IR", "closed", "Closed", "green", 2, True, None),
         ("IR", "returning", "Returning", "red", 3, True, None),
         ("RN", "draft", "Draft", "gray", 1, False, None),
         ("RN", "submitted", "Submitted", "blue", 2, False, None),
@@ -286,10 +286,20 @@ def _seed_data(session: Session) -> None:
         ("PR", "approved", "master", "create_po", True, "Create PO", None),
         ("IR", "open", "purchasing_team", "verify", True, "Verify", "open"),
         ("IR", "open", "master", "verify", True, "Verify", "open"),
-        ("RN", "draft", "requester", "submit", True, "Submit", "submitted"),
-        ("RN", "draft", "master", "submit", True, "Submit", "submitted"),
+        ("RN", "draft", "requester", "submit", True, "Submit for HoP approval", "submitted"),
+        ("RN", "draft", "master", "submit", True, "Submit for HoP approval", "submitted"),
         ("RN", "submitted", "head_of_purchasing", "approve", True, "Approve", "approved"),
         ("RN", "submitted", "master", "approve", True, "Approve", "approved"),
+        ("RN", "submitted", "head_of_purchasing", "reject", True, "Reject", "rejected"),
+        ("RN", "submitted", "master", "reject", True, "Reject", "rejected"),
+        ("RN", "approved", "requester", "complete", True, "Completed", "closed"),
+        ("RN", "approved", "master", "complete", True, "Completed", "closed"),
+        ("RN", "approved", "head_of_purchasing", "complete", True, "Completed", "closed"),
+        ("RN", "approved", "purchasing_team", "complete", True, "Completed", "closed"),
+        ("RN", "approved", "requester", "void", True, "Cancel", "rejected"),
+        ("RN", "approved", "master", "void", True, "Cancel", "rejected"),
+        ("RN", "approved", "head_of_purchasing", "void", True, "Cancel", "rejected"),
+        ("RN", "approved", "purchasing_team", "void", True, "Cancel", "rejected"),
     ]
     for dt, sc, rname, ak, allowed, label, nxt in sap_rows:
         session.add(
@@ -416,21 +426,24 @@ def _seed_data(session: Session) -> None:
 
     pu = session.query(AppUser).filter_by(email="purchasing@school.com").one()
     appr = session.query(PurchaseRequest).filter_by(pr_number="PR2026-00003").one()
-    session.add(
-        PurchaseOrder(
-            po_number="PO2026-00001",
-            pr_id=appr.id,
-            purchasing_team_id=pu.id,
-            status="open",
-            created_at=datetime.utcnow(),
+    appr_lines = sorted(appr.items, key=lambda x: x.item_no)
+    for i, line in enumerate(appr_lines, start=1):
+        session.add(
+            PurchaseOrder(
+                po_number=f"PO2026-{i:05d}",
+                pr_id=appr.id,
+                pr_line_item_id=line.id,
+                purchasing_team_id=pu.id,
+                status="open",
+                created_at=datetime.utcnow(),
+            )
         )
-    )
     session.flush()
-    po = session.query(PurchaseOrder).filter_by(po_number="PO2026-00001").one()
+    po1 = session.query(PurchaseOrder).filter_by(po_number="PO2026-00001").one()
     session.add(
         InventoryReceive(
             ir_number="IR2026-00001",
-            po_id=po.id,
+            po_id=po1.id,
             received_by_id=pu.id,
             status="open",
             created_at=datetime.utcnow(),
@@ -438,6 +451,6 @@ def _seed_data(session: Session) -> None:
         )
     )
     dn_po = session.query(DocumentNumbering).filter_by(document_type="PO").one()
-    dn_po.last_number = max(dn_po.last_number, 1)
+    dn_po.last_number = max(dn_po.last_number, len(appr_lines))
     dn_ir = session.query(DocumentNumbering).filter_by(document_type="IR").one()
     dn_ir.last_number = max(dn_ir.last_number, 1)

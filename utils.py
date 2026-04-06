@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
+import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -38,6 +41,8 @@ def next_document_number(session: Session, document_type: str) -> str:
 
 
 def recalculate_pr_budget(session: Session, pr_id: int) -> float:
+    # Flush so newly added line rows exist in the DB before we query them (otherwise total stays 0).
+    session.flush()
     items = session.query(PurchaseRequestItem).filter_by(pr_id=pr_id).all()
     total = sum(float(i.sub_total) for i in items)
     pr = session.get(PurchaseRequest, pr_id)
@@ -215,3 +220,36 @@ def validate_line_items(session: Session, lines: List[Dict[str, Any]]) -> Tuple[
 def validate_email_format(email: str) -> bool:
     e = (email or "").strip()
     return "@" in e and "." in e.split("@")[-1] and len(e) >= 5
+
+
+def list_row_matches_filter(
+    search: str,
+    status_choice: str,
+    row_status: str,
+    *text_parts: object,
+) -> bool:
+    """List/search UI: optional status dropdown ('All' = no filter) and case-insensitive substring search across text_parts."""
+    if status_choice != "All" and row_status != status_choice:
+        return False
+    q = str(search or "").strip().lower()
+    if not q:
+        return True
+    blob = " ".join(str(x).lower() for x in text_parts)
+    return q in blob
+
+
+def ir_attachment_safe_filename(name: str) -> str:
+    n = (name or "file").strip().replace("\\", "_").replace("/", "_")
+    n = re.sub(r"[^\w.\- ]", "_", n, flags=re.UNICODE).strip()[:200]
+    return n or "file"
+
+
+def save_ir_attachment_file(data_dir: Path, ir_id: int, original_filename: str, body: bytes) -> str:
+    """Write bytes under data_dir/ir_attachments/{ir_id}/; return path relative to data_dir (posix)."""
+    rel_dir = Path("ir_attachments") / str(ir_id)
+    dest_dir = data_dir / rel_dir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stem = ir_attachment_safe_filename(original_filename)
+    fn = f"{uuid.uuid4().hex[:12]}_{stem}"
+    (dest_dir / fn).write_bytes(body)
+    return (rel_dir / fn).as_posix()

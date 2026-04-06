@@ -16,7 +16,15 @@ from auth import (
     set_session_from_user,
 )
 from budget_ui import render_budget_management
-from database import engine, ensure_budget_management_menu, get_session, migrate_sqlite_schema
+from database import (
+    engine,
+    ensure_budget_management_menu,
+    ensure_ir_closed_document_status,
+    ensure_pr_reviewed_hop_actions,
+    ensure_rn_workflow_permissions,
+    get_session,
+    migrate_sqlite_schema,
+)
 from dashboard import render_dashboard
 from models import AppUser, Base, MenuVisibility
 from po_ui import render_po_workspace
@@ -29,6 +37,20 @@ from user_management import render_user_management
 
 def _menu_dict(session: Session, role_id: int) -> dict:
     return {r.menu_key: r for r in session.query(MenuVisibility).filter_by(role_id=role_id).all()}
+
+
+def _app_shell_css() -> None:
+    """Hide sidebar; optional top spacing for main app (after login)."""
+    st.markdown(
+        """
+<style>
+section[data-testid="stSidebar"] { display: none !important; }
+[data-testid="collapsedControl"] { display: none !important; }
+button[kind="header"] { display: none !important; }
+</style>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 def _login_screen_css() -> None:
@@ -131,7 +153,7 @@ form[data-testid="stForm"] button[type="submit"]:hover,
 
 
 def main() -> None:
-    st.set_page_config(page_title="TECHIN — Purchasing", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="TECHIN — Purchasing", layout="wide", initial_sidebar_state="collapsed")
     Base.metadata.create_all(bind=engine)
     migrate_sqlite_schema()
 
@@ -140,6 +162,9 @@ def main() -> None:
         if seed_if_empty(db):
             db.commit()
         ensure_budget_management_menu(db)
+        ensure_ir_closed_document_status(db)
+        ensure_rn_workflow_permissions(db)
+        ensure_pr_reviewed_hop_actions(db)
         if not is_logged_in():
             _login_screen_css()
             st.markdown('<p class="login-welcome">Welcome TECHIN!</p>', unsafe_allow_html=True)
@@ -208,22 +233,29 @@ def main() -> None:
         if user.role.is_master:
             page_keys.append("user_management")
 
-        with st.sidebar:
-            st.markdown(f"**{user.email}**")
-            st.caption(user.role.role_name.replace("_", " "))
-            page = st.radio(
-                "Navigate",
-                page_keys,
-                format_func=lambda x: nav_labels[x],
-                label_visibility="collapsed",
-            )
-            if st.button("Log out", use_container_width=True):
+        _app_shell_css()
+
+        nav_jump = st.session_state.pop("pms_navigate_to_page", None)
+        if nav_jump is not None and nav_jump in page_keys:
+            st.session_state["pms_top_nav"] = nav_jump
+
+        top_user, top_out = st.columns([5, 1])
+        with top_user:
+            st.markdown(f"**{user.email}** · _{user.role.role_name.replace('_', ' ')}_")
+        with top_out:
+            if st.button("Log out", key="pms_logout_top", use_container_width=True):
                 clear_auth_session()
                 st.rerun()
 
-        nav = st.session_state.pop("pms_navigate_to_page", None)
-        if nav:
-            page = nav
+        page = st.radio(
+            "Navigate",
+            page_keys,
+            format_func=lambda x: nav_labels[x],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="pms_top_nav",
+        )
+        st.divider()
 
         mv_pr = menu.get("purchase_request")
         if page == "user_management":

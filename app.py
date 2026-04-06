@@ -20,7 +20,9 @@ from database import (
     engine,
     ensure_budget_management_menu,
     ensure_ir_closed_document_status,
+    ensure_ir_ready_for_pickup_document_status,
     ensure_pr_reviewed_hop_actions,
+    ensure_rn_cancelled_document_status,
     ensure_rn_workflow_permissions,
     get_session,
     migrate_sqlite_schema,
@@ -163,6 +165,8 @@ def main() -> None:
             db.commit()
         ensure_budget_management_menu(db)
         ensure_ir_closed_document_status(db)
+        ensure_ir_ready_for_pickup_document_status(db)
+        ensure_rn_cancelled_document_status(db)
         ensure_rn_workflow_permissions(db)
         ensure_pr_reviewed_hop_actions(db)
         if not is_logged_in():

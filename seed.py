@@ -251,13 +251,15 @@ def _seed_data(session: Session) -> None:
         ("PO", "success", "Success", "green", 2, True, None),
         ("PO", "rejected", "Rejected", "red", 3, True, None),
         ("IR", "open", "Open", "blue", 1, False, None),
-        ("IR", "closed", "Closed", "green", 2, True, None),
-        ("IR", "returning", "Returning", "red", 3, True, None),
+        ("IR", "ready_for_pickup", "Ready to pick up", "yellow", 2, False, None),
+        ("IR", "closed", "Closed", "green", 3, True, None),
+        ("IR", "returning", "Returning", "red", 4, True, None),
         ("RN", "draft", "Draft", "gray", 1, False, None),
         ("RN", "submitted", "Submitted", "blue", 2, False, None),
         ("RN", "approved", "Approved", "yellow", 3, False, None),
         ("RN", "closed", "Closed", "green", 4, True, None),
         ("RN", "rejected", "Rejected", "red", 5, True, None),
+        ("RN", "cancelled", "Cancelled", "gray", 6, True, None),
     ]:
         session.add(
             DocumentStatus(
@@ -288,6 +290,8 @@ def _seed_data(session: Session) -> None:
         ("IR", "open", "master", "verify", True, "Verify", "open"),
         ("RN", "draft", "requester", "submit", True, "Submit for HoP approval", "submitted"),
         ("RN", "draft", "master", "submit", True, "Submit for HoP approval", "submitted"),
+        ("RN", "draft", "requester", "cancel", True, "Cancel", "cancelled"),
+        ("RN", "draft", "master", "cancel", True, "Cancel", "cancelled"),
         ("RN", "submitted", "head_of_purchasing", "approve", True, "Approve", "approved"),
         ("RN", "submitted", "master", "approve", True, "Approve", "approved"),
         ("RN", "submitted", "head_of_purchasing", "reject", True, "Reject", "rejected"),

@@ -1,4 +1,4 @@
-"""Inventory receipt list, row navigation to detail (lines, requester, supplier, checklist, files)."""
+"""Inventory receipt list, row navigation to detail (lines, requester, checklist, files)."""
 
 from __future__ import annotations
 
@@ -31,6 +31,18 @@ _IR_UPLOAD_MAX_BYTES = 15 * 1024 * 1024
 
 def _can_edit_ir_checklist(user: AppUser) -> bool:
     return bool(user.role.is_master or user.role.role_name == "purchasing_team")
+
+
+def _can_mark_ready_for_pickup(user: AppUser) -> bool:
+    return bool(user.role.is_master or user.role.role_name == "purchasing_team")
+
+
+def _ir_status_key(code: str | None) -> str:
+    return str(code or "").strip().lower()
+
+
+def _checklist_complete_for_pickup(ir: InventoryReceive) -> bool:
+    return bool(ir.po_document_ok and ir.delivery_note_ok and ir.invoice_ok)
 
 
 def _user_is_pr_requester(user: AppUser, pr: PurchaseRequest | None) -> bool:
@@ -116,11 +128,16 @@ def render_ir_workspace(session: Session, user: AppUser, menu_rows: dict) -> Non
 
 
 def _render_ir_list(session: Session, user: AppUser) -> None:
+    from po_ui import _requester_display
+
     st.subheader("Inventory receipts")
     rows = (
         session.query(InventoryReceive)
         .options(
-            joinedload(InventoryReceive.purchase_order),
+            joinedload(InventoryReceive.purchase_order)
+            .joinedload(PurchaseOrder.purchase_request)
+            .joinedload(PurchaseRequest.requester)
+            .joinedload(AppUser.student),
             joinedload(InventoryReceive.attachments),
         )
         .order_by(InventoryReceive.id.desc())
@@ -137,7 +154,7 @@ def _render_ir_list(session: Session, user: AppUser) -> None:
             "Search",
             "",
             key="ir_list_search_q",
-            placeholder="IR, PO, status, yes/no for checks…",
+            placeholder="IR, PO, requester, status, checks…",
         )
     with fc2:
         status_pick = st.selectbox(
@@ -148,7 +165,9 @@ def _render_ir_list(session: Session, user: AppUser) -> None:
     filtered: list[InventoryReceive] = []
     for ir in rows:
         po = ir.purchase_order
+        pr = po.purchase_request if po else None
         po_num = po.po_number if po else "—"
+        req_nm = _requester_display(pr)
         n_files = len(ir.attachments)
         if not list_row_matches_filter(
             search,
@@ -156,7 +175,9 @@ def _render_ir_list(session: Session, user: AppUser) -> None:
             ir.status,
             ir.ir_number,
             po_num,
+            req_nm,
             ir.status,
+            _ir_status_label(session, str(ir.status or "")),
             "yes" if ir.po_document_ok else "no",
             "yes" if ir.delivery_note_ok else "no",
             "yes" if ir.invoice_ok else "no",
@@ -170,18 +191,20 @@ def _render_ir_list(session: Session, user: AppUser) -> None:
         st.info("No inventory receipts match your search or status filter.")
         return
 
-    st.caption("Click a row in the table to open that receipt (line items, requester, supplier, checklist, attachments).")
+    st.caption("Click a row in the table to open that receipt (line items, requester, checklist, attachments).")
     ir_ids: List[int] = []
     data: List[Dict[str, Any]] = []
     for ir in filtered:
         po = ir.purchase_order
+        pr = po.purchase_request if po else None
         po_num = po.po_number if po else "—"
         ir_ids.append(ir.id)
         data.append(
             {
                 "IR": ir.ir_number,
                 "PO": po_num,
-                "Status": ir.status,
+                "Requester": _requester_display(pr),
+                "Status": _ir_status_label(session, str(ir.status or "")),
                 "Files": len(ir.attachments),
                 "PO doc": "✓" if ir.po_document_ok else "—",
                 "Delivery": "✓" if ir.delivery_note_ok else "—",
@@ -249,13 +272,18 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
     pr = po.purchase_request if po else None
 
     st.markdown(f"## Inventory receipt `{ir.ir_number}`")
-    st.caption(f"Status: **{_ir_status_label(session, str(ir.status or ''))}**")
 
     meta1, meta2 = st.columns(2)
     with meta1:
         st.text_input("PO number", value=po.po_number if po else "—", disabled=True, key=f"ir_d_po_{ir.id}")
         st.text_input("PR number", value=pr.pr_number if pr else "—", disabled=True, key=f"ir_d_pr_{ir.id}")
     with meta2:
+        st.text_input(
+            "Status",
+            value=_ir_status_label(session, str(ir.status or "")),
+            disabled=True,
+            key=f"ir_d_st_{ir.id}",
+        )
         ca = ir.created_at.strftime("%Y-%m-%d %H:%M UTC") if ir.created_at else "—"
         st.text_input("Created (UTC)", value=ca, disabled=True, key=f"ir_d_ca_{ir.id}")
         rb = session.get(AppUser, ir.received_by_id)
@@ -275,6 +303,7 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
         st.caption("—")
 
     st.markdown("### Requester acceptance")
+    ir_st = _ir_status_key(ir.status)
     if ir.requester_accepted_at:
         ts = ir.requester_accepted_at.strftime("%Y-%m-%d %H:%M:%S UTC")
         acc = ir.requester_acceptor
@@ -285,13 +314,13 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
             if not acc_lbl:
                 acc_lbl = acc.email or ""
         st.success(f"Inventory accepted **{ts}**" + (f" · {acc_lbl}" if acc_lbl else "") + ".")
-    elif _user_is_pr_requester(user, pr):
-        st.caption("Confirm you have received the inventory as expected.")
+    elif _user_is_pr_requester(user, pr) and ir_st == "ready_for_pickup":
+        st.caption("Purchasing marked this receipt **ready to pick up**. Confirm after you collect the items.")
         if st.button("Accept inventory", type="primary", key=f"ir_d_req_accept_{ir.id}"):
             row = session.get(InventoryReceive, ir.id)
             if (
                 row
-                and str(row.status or "").lower() == "open"
+                and _ir_status_key(row.status) == "ready_for_pickup"
                 and not row.requester_accepted_at
                 and pr
                 and pr.requester_id == user.id
@@ -302,8 +331,13 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
                 row.updated_at = datetime.utcnow()
                 session.commit()
                 st.rerun()
+    elif _user_is_pr_requester(user, pr) and ir_st == "open":
+        st.info(
+            "Waiting for **Purchasing** to mark this receipt **Ready to pick up**. "
+            "After that, the **Accept inventory** button will appear here."
+        )
     else:
-        st.caption("Not accepted yet. Only the **requester** on this purchase request can accept.")
+        st.caption("Not accepted yet. Only the **requester** on this purchase request can accept (after pickup is ready).")
 
     st.markdown("### Return")
     ir_closed = str(ir.status or "").lower() == "closed"
@@ -331,16 +365,6 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
         st.caption("The **Return** action is available after this receipt is **closed** (requester accepts inventory).")
 
     line_dicts = _po_line_rows(po) if po else []
-    suppliers: set[str] = set()
-    for row in line_dicts:
-        s = row.get("Supplier")
-        if s and s != "—":
-            suppliers.add(str(s))
-    st.markdown("### Supplier(s)")
-    if suppliers:
-        st.write(", ".join(sorted(suppliers)))
-    else:
-        st.caption("—")
 
     st.markdown("### Line items (from purchase order)")
     if line_dicts:
@@ -370,7 +394,7 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
         st.caption("No lines on this PO.")
 
     st.markdown("### Receiving checklist")
-    if _can_edit_ir_checklist(user) and str(ir.status or "").lower() == "open":
+    if _can_edit_ir_checklist(user) and _ir_status_key(ir.status) == "open":
         st.caption("Tick each box when verified, then click **Save checklist**.")
         cc1, cc2, cc3 = st.columns(3)
         with cc1:
@@ -406,13 +430,42 @@ def _render_ir_detail(session: Session, user: AppUser, menu_rows: dict, ir_id: i
             f"Delivery note: **{'Yes' if ir.delivery_note_ok else 'No'}** · "
             f"Invoice: **{'Yes' if ir.invoice_ok else 'No'}**"
         )
-        st.caption("This receipt is **closed**; the checklist can no longer be edited.")
+        sk = _ir_status_key(ir.status)
+        if sk == "closed":
+            st.caption("This receipt is **closed**; the checklist can no longer be edited.")
+        elif sk == "ready_for_pickup":
+            st.caption("This receipt is **ready for pickup**; the checklist can no longer be edited.")
+        else:
+            st.caption("The checklist can no longer be edited for this status.")
     else:
         st.caption(
             f"PO document: **{'Yes' if ir.po_document_ok else 'No'}** · "
             f"Delivery note: **{'Yes' if ir.delivery_note_ok else 'No'}** · "
             f"Invoice: **{'Yes' if ir.invoice_ok else 'No'}** "
             "(only **Purchasing** or **Master** can change these.)"
+        )
+
+    st.markdown("### Ready for pickup")
+    if _can_mark_ready_for_pickup(user) and _ir_status_key(ir.status) == "open":
+        if _checklist_complete_for_pickup(ir):
+            st.caption("All checklist items are complete. Notify the requester that items are ready to collect.")
+            if st.button("Ready to pick up", type="primary", key=f"ir_d_ready_pickup_{ir.id}"):
+                row = session.get(InventoryReceive, ir.id)
+                if row and _ir_status_key(row.status) == "open":
+                    row.status = "ready_for_pickup"
+                    row.pickup_ready = True
+                    row.updated_at = datetime.utcnow()
+                    session.commit()
+                    st.rerun()
+        else:
+            st.caption(
+                "Complete the **receiving checklist** (all three boxes) and click **Save checklist** first."
+            )
+    elif _ir_status_key(ir.status) == "open":
+        st.caption("**Purchasing** or **Master** marks **Ready to pick up** when the requester can collect items.")
+    elif _ir_status_key(ir.status) == "ready_for_pickup":
+        st.success(
+            "This receipt is **Ready to pick up**. The requester can accept once they have collected the items."
         )
 
     st.markdown("### Attachments")

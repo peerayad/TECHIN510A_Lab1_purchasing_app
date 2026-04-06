@@ -81,6 +81,24 @@ def _go_rn_detail(rn_id: int) -> None:
     st.session_state[SS_RN_ID] = rn_id
 
 
+def _rn_list_item_descriptions(po: PurchaseOrder | None) -> str:
+    """Short summary of PO line descriptions for the list (same lines as receipt detail)."""
+    from po_ui import _po_line_rows
+
+    if not po:
+        return "—"
+    line_dicts = _po_line_rows(po)
+    parts: List[str] = []
+    for row in line_dicts:
+        d = row.get("Description")
+        if d is not None and str(d).strip() and str(d).strip() != "—":
+            parts.append(str(d).strip())
+    if not parts:
+        return "—"
+    joined = " · ".join(parts)
+    return joined if len(joined) <= 400 else f"{joined[:397]}…"
+
+
 def _can_edit_rn_reason(user: AppUser, rn: ReturnNote) -> bool:
     if str(rn.status or "").lower() != "draft":
         return False
@@ -109,9 +127,27 @@ def render_rn_workspace(session: Session, user: AppUser, menu_rows: dict) -> Non
 
 
 def _render_rn_list(session: Session, user: AppUser) -> None:
+    from po_ui import _requester_display
+
     st.subheader("Return notes")
     st.caption("Return documents linked to a closed inventory receipt. Open a row for items, reason, and workflow.")
-    rns = session.query(ReturnNote).order_by(ReturnNote.id.desc()).limit(200).all()
+    rns = (
+        session.query(ReturnNote)
+        .options(
+            joinedload(ReturnNote.inventory_receive)
+            .joinedload(InventoryReceive.purchase_order)
+            .options(
+                joinedload(PurchaseOrder.purchase_request).options(
+                    joinedload(PurchaseRequest.requester).joinedload(AppUser.student),
+                    joinedload(PurchaseRequest.items).joinedload(PurchaseRequestItem.supplier),
+                ),
+                joinedload(PurchaseOrder.pr_line_item).joinedload(PurchaseRequestItem.supplier),
+            ),
+        )
+        .order_by(ReturnNote.id.desc())
+        .limit(200)
+        .all()
+    )
     if not rns:
         st.info("No return notes.")
         return
@@ -122,7 +158,7 @@ def _render_rn_list(session: Session, user: AppUser) -> None:
             "Search",
             "",
             key="rn_list_search_q",
-            placeholder="RN number, IR id, status, reason…",
+            placeholder="RN, IR, requester, item text, reason, status…",
         )
     with fc2:
         status_pick = st.selectbox(
@@ -134,6 +170,12 @@ def _render_rn_list(session: Session, user: AppUser) -> None:
     rows_out: List[Dict[str, Any]] = []
     for r in rns:
         reason = r.reason or ""
+        ir = r.inventory_receive
+        po = ir.purchase_order if ir else None
+        pr = po.purchase_request if po else None
+        requester_disp = _requester_display(pr)
+        item_desc = _rn_list_item_descriptions(po)
+        reason_disp = (reason.strip() or "—")
         if not list_row_matches_filter(
             search,
             status_pick,
@@ -142,6 +184,8 @@ def _render_rn_list(session: Session, user: AppUser) -> None:
             str(r.ir_id),
             r.status,
             reason,
+            requester_disp,
+            item_desc,
         ):
             continue
         rn_ids.append(r.id)
@@ -149,6 +193,9 @@ def _render_rn_list(session: Session, user: AppUser) -> None:
             {
                 "RN": r.rn_number,
                 "IR id": r.ir_id,
+                "Requester": requester_disp,
+                "Item description": item_desc,
+                "Reason": reason_disp,
                 "Status": _rn_status_label(session, r.status),
             }
         )
@@ -164,6 +211,10 @@ def _render_rn_list(session: Session, user: AppUser) -> None:
         on_select="rerun",
         selection_mode="single-row",
         key=SS_RN_LIST_DF,
+        column_config={
+            "Item description": st.column_config.TextColumn("Item description", width="large"),
+            "Reason": st.column_config.TextColumn("Reason", width="medium"),
+        },
     )
     ev = st.session_state.get(SS_RN_LIST_DF)
     for raw in _rn_list_selected_indices(ev):
@@ -271,21 +322,6 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
             height=160,
             key=rk,
         )
-        sc1, sc2 = st.columns(2)
-        with sc1:
-            if st.button("Save reason", key=f"rn_save_reason_{rn.id}"):
-                row = session.get(ReturnNote, rn.id)
-                if row:
-                    txt = str(st.session_state.get(rk, "") or "").strip()
-                    row.reason = txt or None
-                    row.updated_at = datetime.utcnow()
-                    session.commit()
-                    st.rerun()
-        with sc2:
-            if st.button("Cancel", key=f"rn_cancel_{rn.id}"):
-                st.session_state[_rn_reason_reset_key(rn.id)] = True
-                _go_rn_list()
-                st.rerun()
     else:
         st.write((rn.reason or "").strip() or "—")
 
@@ -293,7 +329,9 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
     status_l = _rn_status_key(rn.status)
     role_id = user.role.id if user.role is not None else user.role_id
     if status_l == "draft" and _can_edit_rn_reason(user, rn):
-        st.caption("**Draft** — save your reason, then submit for Head of Purchasing approval.")
+        st.caption(
+            "**Draft** — enter your reason, then **Submit for HoP approval**, or **Cancel** in Actions to stop this return (kept in the list as cancelled)."
+        )
     elif status_l == "draft":
         st.caption("Only the **requester** or **Master** can edit the reason and submit this draft return.")
     elif status_l == "submitted":
@@ -307,6 +345,8 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
         st.caption("This return note is **completed** and closed.")
     elif status_l == "rejected":
         st.caption("This return was rejected.")
+    elif status_l == "cancelled":
+        st.caption("This return note was **cancelled** before submission; it remains on record.")
 
     actions = get_rn_actions(session, role_id, status_l)
 
@@ -326,28 +366,65 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
         st.rerun()
 
     _primary_actions = frozenset({"submit", "approve", "complete"})
-    for sap in sorted(
+    sorted_actions = sorted(
         actions,
         key=lambda x: (0 if x.action_key in _primary_actions else 1, x.action_key != "complete", x.button_label),
-    ):
+    )
+    if sorted_actions:
+        action_cols = st.columns(len(sorted_actions))
+    for idx, sap in enumerate(sorted_actions):
         btn_type = "primary" if sap.action_key in _primary_actions else "secondary"
-        if st.button(sap.button_label, key=f"rn_act_{rn.id}_{sap.action_key}", type=btn_type):
-            row = session.get(ReturnNote, rn.id)
-            if not row or not sap.next_status:
-                return
-            if sap.action_key == "submit":
-                _do_submit()
-                return
-            row.status = sap.next_status
-            row.updated_at = datetime.utcnow()
-            session.commit()
-            st.session_state[_rn_reason_reset_key(rn.id)] = True
-            st.rerun()
+        with action_cols[idx]:
+            if st.button(
+                sap.button_label,
+                key=f"rn_act_{rn.id}_{sap.action_key}",
+                type=btn_type,
+                use_container_width=True,
+            ):
+                row = session.get(ReturnNote, rn.id)
+                if not row or not sap.next_status:
+                    return
+                if sap.action_key == "submit":
+                    _do_submit()
+                    return
+                if sap.action_key == "cancel":
+                    merged = str(st.session_state.get(rk, row.reason or "") or "").strip()
+                    if merged:
+                        row.reason = merged
+                row.status = sap.next_status
+                row.updated_at = datetime.utcnow()
+                session.commit()
+                st.session_state[_rn_reason_reset_key(rn.id)] = True
+                st.rerun()
 
     if not actions and status_l == "draft" and _can_edit_rn_reason(user, rn):
         st.caption("Using built-in actions (database permissions will be synced on next app restart).")
-        if st.button("Submit for HoP approval", type="primary", key=f"rn_fb_submit_{rn.id}"):
-            _do_submit()
+        fb1, fb2 = st.columns(2)
+        with fb1:
+            if st.button(
+                "Submit for HoP approval",
+                type="primary",
+                key=f"rn_fb_submit_{rn.id}",
+                use_container_width=True,
+            ):
+                _do_submit()
+        with fb2:
+            if st.button(
+                "Cancel",
+                type="secondary",
+                key=f"rn_fb_cancel_draft_{rn.id}",
+                use_container_width=True,
+            ):
+                row = session.get(ReturnNote, rn.id)
+                if row and _rn_status_key(row.status) == "draft":
+                    merged = str(st.session_state.get(rk, row.reason or "") or "").strip()
+                    if merged:
+                        row.reason = merged
+                    row.status = "cancelled"
+                    row.updated_at = datetime.utcnow()
+                    session.commit()
+                    st.session_state[_rn_reason_reset_key(rn.id)] = True
+                    st.rerun()
 
     if not actions and status_l == "approved":
         rname = user.role.role_name if user.role else ""
@@ -355,7 +432,12 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
             st.caption("Using built-in **Completed** / **Cancel** (sync permissions on next app restart if needed).")
             fc1, fc2 = st.columns(2)
             with fc1:
-                if st.button("Completed", type="primary", key=f"rn_fb_complete_{rn.id}"):
+                if st.button(
+                    "Completed",
+                    type="primary",
+                    key=f"rn_fb_complete_{rn.id}",
+                    use_container_width=True,
+                ):
                     row = session.get(ReturnNote, rn.id)
                     if row:
                         row.status = "closed"
@@ -364,7 +446,12 @@ def _render_rn_detail(session: Session, user: AppUser, rn_id: int) -> None:
                         st.session_state[_rn_reason_reset_key(rn.id)] = True
                         st.rerun()
             with fc2:
-                if st.button("Cancel", type="secondary", key=f"rn_fb_void_{rn.id}"):
+                if st.button(
+                    "Cancel",
+                    type="secondary",
+                    key=f"rn_fb_void_{rn.id}",
+                    use_container_width=True,
+                ):
                     row = session.get(ReturnNote, rn.id)
                     if row:
                         row.status = "rejected"

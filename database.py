@@ -29,6 +29,54 @@ def get_session() -> Session:
     return SessionLocal()
 
 
+def clear_all_procurement_documents(session: Session) -> None:
+    """
+    Delete all purchase requests, POs, inventory receipts, return notes, and dependent rows
+    (PR messages, PR budget transactions, PR status history, line items, IR attachments).
+    Removes files under data/ir_attachments/. Resets document counters for PR, PO, IR, RN.
+    Does not delete users, classes, teams, suppliers, or reference/config tables.
+    """
+    import shutil
+
+    from models import (
+        BudgetTransaction,
+        DocumentNumbering,
+        IRAttachment,
+        InventoryReceive,
+        Message,
+        PRStatusHistory,
+        PurchaseOrder,
+        PurchaseRequest,
+        PurchaseRequestItem,
+        ReturnNote,
+    )
+
+    ir_att_dir = DATA_DIR / "ir_attachments"
+    if ir_att_dir.is_dir():
+        shutil.rmtree(ir_att_dir, ignore_errors=True)
+
+    session.query(ReturnNote).delete(synchronize_session=False)
+    session.query(IRAttachment).delete(synchronize_session=False)
+    session.query(InventoryReceive).delete(synchronize_session=False)
+    session.query(PurchaseOrder).delete(synchronize_session=False)
+    session.query(Message).filter(Message.reference_type == "PR").delete(synchronize_session=False)
+    session.query(BudgetTransaction).filter(BudgetTransaction.reference_type == "PR").delete(
+        synchronize_session=False
+    )
+    session.query(PRStatusHistory).delete(synchronize_session=False)
+    session.query(PurchaseRequestItem).delete(synchronize_session=False)
+    session.query(PurchaseRequest).delete(synchronize_session=False)
+
+    now_y = datetime.utcnow().year
+    for dt in ("PR", "PO", "IR", "RN"):
+        row = session.query(DocumentNumbering).filter_by(document_type=dt).first()
+        if row:
+            row.last_number = 0
+            row.year = now_y
+
+    session.commit()
+
+
 def migrate_sqlite_schema() -> None:
     try:
         insp = inspect(engine)
@@ -78,7 +126,7 @@ def migrate_sqlite_schema() -> None:
                         text(
                             "UPDATE inventory_receive SET status = 'closed' "
                             "WHERE requester_accepted_at IS NOT NULL "
-                            "AND (status IS NULL OR LOWER(TRIM(CAST(status AS TEXT))) = 'open')"
+                            "AND (status IS NULL OR LOWER(TRIM(CAST(status AS TEXT))) IN ('open', 'ready_for_pickup'))"
                         )
                     )
 
@@ -204,8 +252,28 @@ def ensure_ir_closed_document_status(session: Session) -> None:
             status_code="closed",
             status_label="Closed",
             status_color="green",
-            order_sequence=2,
+            order_sequence=3,
             is_final=True,
+            description=None,
+        )
+    )
+    session.commit()
+
+
+def ensure_ir_ready_for_pickup_document_status(session: Session) -> None:
+    """Add IR status ready_for_pickup for DBs that predate the pickup workflow."""
+    from models import DocumentStatus
+
+    if session.query(DocumentStatus).filter_by(document_type="IR", status_code="ready_for_pickup").first():
+        return
+    session.add(
+        DocumentStatus(
+            document_type="IR",
+            status_code="ready_for_pickup",
+            status_label="Ready to pick up",
+            status_color="yellow",
+            order_sequence=2,
+            is_final=False,
             description=None,
         )
     )
@@ -222,6 +290,8 @@ def ensure_rn_workflow_permissions(session: Session) -> None:
     specs = [
         ("RN", "draft", "requester", "submit", True, "Submit for HoP approval", "submitted"),
         ("RN", "draft", "master", "submit", True, "Submit for HoP approval", "submitted"),
+        ("RN", "draft", "requester", "cancel", True, "Cancel", "cancelled"),
+        ("RN", "draft", "master", "cancel", True, "Cancel", "cancelled"),
         ("RN", "submitted", "head_of_purchasing", "approve", True, "Approve", "approved"),
         ("RN", "submitted", "master", "approve", True, "Approve", "approved"),
         ("RN", "submitted", "head_of_purchasing", "reject", True, "Reject", "rejected"),
@@ -266,6 +336,26 @@ def ensure_rn_workflow_permissions(session: Session) -> None:
         added = True
     if added:
         session.commit()
+
+
+def ensure_rn_cancelled_document_status(session: Session) -> None:
+    """Add RN status 'cancelled' for DBs seeded before that status existed."""
+    from models import DocumentStatus
+
+    if session.query(DocumentStatus).filter_by(document_type="RN", status_code="cancelled").first():
+        return
+    session.add(
+        DocumentStatus(
+            document_type="RN",
+            status_code="cancelled",
+            status_label="Cancelled",
+            status_color="gray",
+            order_sequence=6,
+            is_final=True,
+            description=None,
+        )
+    )
+    session.commit()
 
 
 def ensure_pr_reviewed_hop_actions(session: Session) -> None:

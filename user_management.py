@@ -22,6 +22,7 @@ from models import (
     Team,
     TeamMembership,
 )
+from database import clear_all_procurement_documents
 from utils import validate_email_format as vef
 
 PR_TABLE = "purchase_requests"
@@ -39,7 +40,9 @@ PR_FIELDS = [
 
 def render_user_management(session: Session) -> None:
     st.title("User management")
-    t1, t2, t3, t4 = st.tabs(["Student list", "User accounts", "Roles & permissions", "Master data"])
+    t1, t2, t3, t4, t5 = st.tabs(
+        ["Student list", "User accounts", "Roles & permissions", "Master data", "Data maintenance"]
+    )
     with t1:
         _tab_students(session)
     with t2:
@@ -48,6 +51,24 @@ def render_user_management(session: Session) -> None:
         _tab_permissions(session)
     with t4:
         _tab_master_data(session)
+    with t5:
+        _tab_data_maintenance(session)
+
+
+def _tab_data_maintenance(session: Session) -> None:
+    st.subheader("Clear procurement documents")
+    st.warning(
+        "This permanently deletes **all** purchase requests, purchase orders, inventory receipts, "
+        "return notes, PR line items, PR status history, PR messages, and PR budget transactions. "
+        "Uploaded IR files under **data/ir_attachments/** are removed. "
+        "Document numbers for PR, PO, IR, and RN reset so the next documents start from 1 again. "
+        "Users, classes, teams, suppliers, and settings are **not** removed."
+    )
+    if st.checkbox("I understand this cannot be undone.", key="um_clear_proc_confirm"):
+        if st.button("Delete all PR / PO / IR / RN", type="primary", key="um_clear_proc_run"):
+            clear_all_procurement_documents(session)
+            st.success("All procurement documents were cleared. You can create new requests.")
+            st.rerun()
 
 
 def _tab_students(session: Session) -> None:

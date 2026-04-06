@@ -261,6 +261,35 @@ def _go_detail(pr_id: int) -> None:
     st.session_state[SS_PR_ID] = pr_id
 
 
+def _pr_list_requester_display(pr: PurchaseRequest) -> str:
+    rq = pr.requester
+    if not rq:
+        return "—"
+    stu = rq.student
+    if stu:
+        name = f"{stu.first_name} {stu.last_name}".strip()
+        if name:
+            return name
+    return rq.email or "—"
+
+
+def _pr_list_class_team_display(pr: PurchaseRequest) -> str:
+    c = pr.class_
+    t = pr.team
+    if not c and not t:
+        return "—"
+    cpart = c.class_code if c else "—"
+    tpart = t.team_name if t else "—"
+    return f"{cpart} / {tpart}"
+
+
+def _pr_list_purchase_round_display(pr: PurchaseRequest) -> str:
+    rnd = pr.purchasing_round
+    if not rnd:
+        return "—"
+    return rnd.round_name
+
+
 def _maybe_submitted_to_reviewed(session: Session, pr: PurchaseRequest, user: AppUser) -> bool:
     lines = session.query(PurchaseRequestItem).filter_by(pr_id=pr.id).all()
     if not lines:
@@ -320,7 +349,16 @@ def _pr_list_selected_indices(event: Any) -> List[int]:
 def _render_list(session: Session, user: AppUser, own_only: bool) -> None:
     st.subheader("Purchase requests")
     st.caption("Click a row in the table to open that purchase request.")
-    q = session.query(PurchaseRequest).order_by(PurchaseRequest.id.desc())
+    q = (
+        session.query(PurchaseRequest)
+        .options(
+            joinedload(PurchaseRequest.requester).joinedload(AppUser.student),
+            joinedload(PurchaseRequest.class_),
+            joinedload(PurchaseRequest.team),
+            joinedload(PurchaseRequest.purchasing_round),
+        )
+        .order_by(PurchaseRequest.id.desc())
+    )
     if own_only and not user.role.is_master:
         q = q.filter(PurchaseRequest.requester_id == user.id)
     prs = q.limit(200).all()
@@ -334,7 +372,7 @@ def _render_list(session: Session, user: AppUser, own_only: bool) -> None:
                 "Search",
                 "",
                 key="pr_list_search_q",
-                placeholder="PR number, status, budget…",
+                placeholder="PR, requester, class/team, round, status, budget…",
             )
         with fc2:
             status_pick = st.selectbox(
@@ -350,6 +388,9 @@ def _render_list(session: Session, user: AppUser, own_only: bool) -> None:
                 status_pick,
                 p.status,
                 p.pr_number,
+                _pr_list_requester_display(p),
+                _pr_list_class_team_display(p),
+                _pr_list_purchase_round_display(p),
                 p.status,
                 f"{p.budget_amount:.2f}",
             )
@@ -359,7 +400,14 @@ def _render_list(session: Session, user: AppUser, own_only: bool) -> None:
         else:
             df = pd.DataFrame(
                 [
-                    {"PR": p.pr_number, "Status": p.status, "Budget": f"{p.budget_amount:.2f}"}
+                    {
+                        "PR": p.pr_number,
+                        "Requester": _pr_list_requester_display(p),
+                        "Class/Team": _pr_list_class_team_display(p),
+                        "Purchase round": _pr_list_purchase_round_display(p),
+                        "Status": p.status,
+                        "Budget": f"{p.budget_amount:.2f}",
+                    }
                     for p in filtered
                 ]
             )
@@ -370,6 +418,11 @@ def _render_list(session: Session, user: AppUser, own_only: bool) -> None:
                 on_select="rerun",
                 selection_mode="single-row",
                 key=SS_PR_LIST_DF,
+                column_config={
+                    "Requester": st.column_config.TextColumn("Requester", width="medium"),
+                    "Class/Team": st.column_config.TextColumn("Class/Team", width="medium"),
+                    "Purchase round": st.column_config.TextColumn("Purchase round", width="small"),
+                },
             )
             ev = st.session_state.get(SS_PR_LIST_DF)
             for raw in _pr_list_selected_indices(ev):
@@ -382,7 +435,15 @@ def _render_list(session: Session, user: AppUser, own_only: bool) -> None:
                     st.rerun()
                 break
     if user.role.role_name == "requester" or user.role.is_master:
-        if st.button("New purchase request"):
+        restrict_req = _restrict_class_team(user)
+        member_teams = _member_team_ids(session, user.id) if restrict_req else set()
+        pr_blocked = restrict_req and len(member_teams) == 0
+        if pr_blocked:
+            st.warning(
+                "You are not assigned to any team yet, so you cannot start a purchase request. "
+                "A **Master** user must add you under **User management → Master data → Team members**."
+            )
+        if st.button("New purchase request", disabled=pr_blocked):
             st.session_state[SS_SCREEN] = "form"
             st.session_state.pop(SS_PR_ID, None)
             st.session_state.pop("pr_line_rows", None)
@@ -399,6 +460,8 @@ def _render_form(session: Session, user: AppUser) -> None:
     pr: Optional[PurchaseRequest] = None
     if pr_id:
         pr = session.get(PurchaseRequest, pr_id)
+        if pr is None:
+            st.session_state.pop(SS_PR_ID, None)
         if pr and pr.status != "draft":
             _go_detail(pr.id)
             st.rerun()
@@ -417,7 +480,10 @@ def _render_form(session: Session, user: AppUser) -> None:
         st.rerun()
         return
     if restrict and not mids:
-        st.error("No team memberships. Ask master to assign teams.")
+        st.error(
+            "You cannot create a purchase request because your account is not on any **team**. "
+            "Ask a **Master** user to add you under **User management → Master data → Team members**."
+        )
         _go_list()
         st.rerun()
         return
@@ -508,7 +574,11 @@ def _render_form(session: Session, user: AppUser) -> None:
         t_lab = st.selectbox("Team *", t_labels, index=min(ti, len(t_labels) - 1), key="pr_form_team")
         tid = tmap[t_lab]
 
-        req_nm = f"{user.student.first_name} {user.student.last_name}".strip()
+        stu = user.student
+        if stu:
+            req_nm = f"{stu.first_name} {stu.last_name}".strip() or (user.email or "—")
+        else:
+            req_nm = user.email or "—"
         st.text_input("Requester", value=req_nm, disabled=True, key="pr_form_req_name")
 
     with rc:

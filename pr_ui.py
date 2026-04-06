@@ -20,6 +20,7 @@ from models import (
     PurchaseRequestItem,
     PurchasingRound,
     StatusActionPermission,
+    StudentList,
     Supplier,
     Team,
     TeamMembership,
@@ -751,7 +752,20 @@ def _render_detail(session: Session, user: AppUser) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("### Messages")
-    for m in session.query(Message).filter_by(reference_id=pr.id, reference_type="PR").order_by(Message.timestamp).all():
+    msg_rows = (
+        session.query(Message, AppUser, StudentList)
+        .join(AppUser, Message.sender_id == AppUser.id)
+        .join(StudentList, AppUser.student_list_id == StudentList.id)
+        .filter(Message.reference_id == pr.id, Message.reference_type == "PR")
+        .order_by(Message.timestamp)
+        .all()
+    )
+    if not msg_rows:
+        st.caption("No messages yet.")
+    for m, sender, stud in msg_rows:
+        name = f"{stud.first_name} {stud.last_name}".strip() or sender.email
+        ts_label = m.timestamp.strftime("%Y-%m-%d %H:%M UTC") if m.timestamp else "—"
+        st.markdown(f"**{name}** · `{ts_label}`")
         st.write(m.message)
     nm = st.text_area("Add message", key=f"m_{pr.id}")
     if st.button("Send", key=f"ms_{pr.id}"):

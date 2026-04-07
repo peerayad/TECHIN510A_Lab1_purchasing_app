@@ -40,11 +40,6 @@ Requester creates a return from inventory receive, submits to the head of purcha
 
 ![Returning process — RN lifecycle](assets/workflow-03-returning-process.png)
 
-### App screenshots & branding
-
-Login / brand artwork used in the app:
-
-![Login branding](assets/login_brand.png)
 
 ---
 

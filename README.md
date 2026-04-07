@@ -2,6 +2,29 @@
 
 Streamlit web app for class purchasing workflows: purchase requests (PRs), approvals, purchase orders (POs), inventory receiving, return notes, user management, and budget assignment (including CSV import).
 
+## Work flow
+
+Reference swimlane diagrams for the three main purchasing processes: PR lifecycle, receiving, and returns.
+
+### 1. Purchasing process
+
+Requester → Approver → Head of purchasing → Purchasing team. States include PR draft, submitted, approved/rejected, PO creation, and budget **consume** on submit / **return** on rejection.
+
+![Purchasing process — PR through PO](assets/workflow-01-purchasing-process.png)
+
+### 2. Receiving process
+
+Purchasing team verifies PO, delivery note, and invoice; may contact the supplier if needed, then creates an **IR open**. Requester picks up the product and accepts (or enters the returning flow if not accepted).
+
+![Receiving process — IR and pickup](assets/workflow-02-receiving-process.png)
+
+### 3. Returning process
+
+Requester creates a return from inventory receive, submits to the head of purchasing, drops off the product after approval, then head of purchasing inspects, completes the return, and closes the RN (**return budget** on close).
+
+![Returning process — RN lifecycle](assets/workflow-03-returning-process.png)
+
+
 ## Requirements
 
 - Python 3.10+ (3.11+ recommended)

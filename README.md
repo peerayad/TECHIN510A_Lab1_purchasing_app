@@ -2,6 +2,22 @@
 
 Streamlit web app for class purchasing workflows: purchase requests (PRs), approvals, purchase orders (POs), inventory receiving, return notes, user management, and budget assignment (including CSV import).
 
+## Application preview
+
+Examples of the running web application (Streamlit UI).
+
+### Log in page
+
+![Log in page](assets/Log%20in%20page.png)
+
+### Purchase request page
+
+![Purchase request workspace](assets/Purchase%20Request%20Page.png)
+
+### PO summary list
+
+![Purchase orders summary list](assets/PO%20Summary%20List.png)
+
 ## Work flow
 
 Reference swimlane diagrams for the three main purchasing processes: PR lifecycle, receiving, and returns.

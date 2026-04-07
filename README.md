@@ -222,19 +222,64 @@ To wipe local data and force a **fresh seed** on next launch:
 
 ## Project layout
 
+### Application source (Python)
+
 | Path | Purpose |
 |------|---------|
-| `app.py` | Streamlit entrypoint, routing, login |
-| `models.py` | SQLAlchemy models |
-| `database.py` | SQLite engine, sessions, migrations |
-| `seed.py` | One-time seed when DB is empty |
-| `auth.py` | Login, password hashing |
-| `*_ui.py` | Feature screens (PR, PO, IR, RN, budget, etc.) |
-| `user_management.py` | Master data and users |
-| `utils.py` | Budget and validation helpers |
+| `app.py` | Streamlit entrypoint, page config, login shell, top navigation, feature routing |
+| `auth.py` | Login, bcrypt password hashing, session user |
+| `database.py` | SQLite URL, engine, `get_session()`, schema migrations, procurement reset helper |
+| `models.py` | SQLAlchemy ORM models (users, PR/PO/IR/RN, budget, permissions, menus, etc.) |
+| `seed.py` | One-time demo data when the database is empty |
+| `utils.py` | Document numbering, PR budget totals, budget consume/return, filters, validation helpers |
+| `pms_ui.py` | Shared Streamlit CSS (page background, buttons, form fields) |
+| `dashboard.py` | Dashboard screen |
+| `pr_ui.py` | Purchase request workspace (list, edit, workflow, line items) |
+| `po_ui.py` | Purchase order workspace |
+| `ir_ui.py` | Inventory receipt workspace (attachments under `data/ir_attachments/`) |
+| `rn_ui.py` | Return note workspace |
+| `budget_ui.py` | Budget management and CSV-related flows |
+| `user_management.py` | Master-only user and master-data management |
+
+### Configuration and docs
+
+| Path | Purpose |
+|------|---------|
+| `requirements.txt` | Python dependencies (`streamlit`, `sqlalchemy`, `pandas`, `bcrypt`) |
+| `README.md` | Setup, run instructions, workflow diagrams, preview screenshots |
+| `.gitignore` | Excludes `.venv/`, `data/` (entire tree: DB + `ir_attachments/`), `__pycache__/`, `.env`, `.streamlit/secrets.toml` |
+| `Lab 1 Report.pdf` | Lab write-up (in repo when included with your submission) |
+
+### Assets (static images)
+
+All files below live in **`assets/`**:
+
+| File | Role |
+|------|------|
+| `workflow-01-purchasing-process.png` | Purchasing workflow diagram (README) |
+| `workflow-02-receiving-process.png` | Receiving workflow diagram (README) |
+| `workflow-03-returning-process.png` | Returning workflow diagram (README) |
+| `Log in page.png` | Application preview — login |
+| `Purchase Request Page.png` | Application preview — purchase requests |
+| `PO Summary List.png` | Application preview — purchase orders |
+| `login_brand.png` | Branding artwork (not referenced in README preview; kept in repo for reuse) |
+
+### Runtime / generated (local only, not committed)
+
+| Path | Purpose |
+|------|---------|
+| `data/pms.db` | SQLite database (created on first run under `data/`, which is gitignored) |
+| `data/ir_attachments/` | Inventory receipt uploads (created when used) |
+| `.venv/` | Python virtual environment (you create this with `python -m venv .venv`) |
+| `__pycache__/` | Python bytecode cache (recreated when you run the app; gitignored) |
 
 ---
 
-## Remote
+## Repositories
 
-Repository: [TECHIN510A_Lab1_purchasing_app](https://github.com/peerayad/TECHIN510A_Lab1_purchasing_app)
+| Remote | URL |
+|--------|-----|
+| `peerayad/TECHIN510A_Lab1_purchasing_app` | [TECHIN510A_Lab1_purchasing_app](https://github.com/peerayad/TECHIN510A_Lab1_purchasing_app) |
+| `GIX-Luyao/lab-1-peerayad` | [lab-1-peerayad](https://github.com/GIX-Luyao/lab-1-peerayad) |
+
+Add or adjust names here if you use additional Git remotes.

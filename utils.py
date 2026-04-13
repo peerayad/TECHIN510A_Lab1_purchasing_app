@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+import statistics
 import uuid
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -252,6 +254,38 @@ def validate_line_items(session: Session, lines: List[Dict[str, Any]]) -> Tuple[
 def validate_email_format(email: str) -> bool:
     e = (email or "").strip()
     return "@" in e and "." in e.split("@")[-1] and len(e) >= 5
+
+
+def summarize_number_statistics(values: Sequence[float | int]) -> Dict[str, float]:
+    """Compute mean, median, and sample standard deviation for a list of numbers.
+
+    Uses the sample standard deviation (``statistics.stdev``) when there are at
+    least two values; for a single value the standard deviation is ``0.0``.
+
+    Args:
+        values: Sequence of numeric values (e.g. ``int`` or ``float``).
+
+    Returns:
+        Dictionary with keys ``mean``, ``median``, and ``standard_deviation``.
+
+    Raises:
+        ValueError: If ``values`` is empty.
+    """
+    data = list(values)
+    if not data:
+        raise ValueError("values must contain at least one number")
+    xs = [float(x) for x in data]
+    mean_val = float(statistics.mean(xs))
+    median_val = float(statistics.median(xs))
+    if len(xs) < 2:
+        stdev_val = 0.0
+    else:
+        stdev_val = float(statistics.stdev(xs))
+    return {
+        "mean": mean_val,
+        "median": median_val,
+        "standard_deviation": stdev_val,
+    }
 
 
 def list_row_matches_filter(

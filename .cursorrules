@@ -1,0 +1,62 @@
+# Purchasing Management System — Cursor rules
+
+Streamlit lab app for class purchasing workflows (PR, PO, IR, RN, budgets, users). Follow these rules for all edits unless a task explicitly overrides them.
+
+## Stack
+
+- **Python** 3.11+ (prefer modern syntax compatible with 3.11).
+- **SQLite** for persistence; database file under `data/` (gitignored).
+- **SQLAlchemy** 2.x declarative models and sessions; use `Session` typing and `Mapped[...]` in `models.py`.
+- **Plotly** for charts and interactive visuals in Streamlit (`st.plotly_chart`). Do not add `st.bar_chart` / Altair / Matplotlib for product charts unless the user explicitly asks.
+- **bcrypt** via the project’s auth helpers for passwords; never store plaintext passwords.
+
+## Project structure
+
+| Area | Responsibility |
+|------|------------------|
+| `app.py` | Streamlit entrypoint: `st.set_page_config`, login shell, top navigation, route to feature modules. |
+| `dashboard.py` | Dashboard metrics, Plotly charts, cached data prep for visuals. |
+| `models.py` | SQLAlchemy ORM models only. |
+| `database.py` | Engine, `get_session()`, SQLite migrations, schema helpers. |
+| `utils.py` | Document numbering, budget math, validation helpers shared by UI modules. |
+| `auth.py` | Login, session user, password hashing. |
+| `*_ui.py` | Feature workspaces (`pr_ui`, `po_ui`, `ir_ui`, `rn_ui`, `budget_ui`, `pms_ui` for shared CSS). |
+| `user_management.py` | Master user and master-data UI. |
+| `seed.py` | One-time seed when DB is empty. |
+| `data/` | Runtime SQLite DB and `ir_attachments/` (local only; not committed). |
+
+Keep new features in the appropriate module; avoid bloating `app.py` with business logic.
+
+## Coding standards
+
+- **Type hints**: Use annotations on public functions and non-trivial locals; prefer `list[str]`, `dict[str, int]`, `X | None` (with `from __future__ import annotations` where useful).
+- **Docstrings**: **Google style** for public modules, functions, and non-obvious helpers (`Args`, `Returns`, `Raises` when relevant).
+- **Names**: Descriptive identifiers (`pr_q`, `rows_snapshot`, `net_budget_reserved`); avoid 1–2 character names except loop indices and well-known math symbols.
+- **Function length**: Prefer **under ~30 lines** per function; split helpers if a screen or workflow block grows large.
+- **SQLAlchemy**: Prefer ORM queries and explicit `filter`/`joinedload` over raw SQL unless migrating in `database.py`.
+- **Caching**: Arguments passed to `st.cache_data` must be **hashable** (e.g. `tuple[tuple[str, int], ...]` of plain Python scalars). Normalize ORM rows to `str`/`int` before caching.
+
+## Streamlit conventions
+
+- Use **`st.cache_data`** for expensive or repeated read-only transformations (e.g. chart data from query snapshots). Do not pass unhashable objects (SQLAlchemy `Session`, live `Row` objects) as cache keys; snapshot to primitives first.
+- Use **`st.error`** (and optionally `st.warning` / `st.exception` in dev) for user-visible failures (validation, permission denied, missing data). Prefer clear messages over stack traces for expected cases.
+- Use **`st.info`** for neutral empty states when there is no data to show.
+- Keep **session state** keys prefixed or namespaced (`pms_*`, feature-specific) to avoid collisions.
+- Reuse **`pms_ui`** for shared styling (buttons, backgrounds) when touching global look-and-feel.
+
+## Visualization (Plotly)
+
+- **Library**: Plotly only for dashboard and in-app charts unless the user requests otherwise.
+- **Palette** (e.g. PR status and similar categorical series): use exactly these hex colors in order for the primary four categories — **`#1f77b4`**, **`#ff7f0e`**, **`#2ca02c`**, **`#d62728`** — mapped to **draft → submitted → approved → rejected** when that semantics applies. Use a single neutral fallback (e.g. `#7f7f7f`) for extra categories not in that set.
+- **Layout**: Every figure must include a **title**, **x-axis title**, and **y-axis title** (`fig.update_layout` / `update_xaxes` / `update_yaxes` as appropriate).
+- **Hover**: Prefer explicit `hovertemplate` with readable labels and integer counts where counts are discrete.
+- **Rendering**: Use `st.plotly_chart(fig, use_container_width=True)` unless a fixed width is required.
+
+## Security and data
+
+- Never commit secrets, `.env`, or `data/pms.db`. Demo passwords in README are for local demo only.
+- Enforce role and menu visibility checks in UI before showing or mutating sensitive data.
+
+## Testing mindset
+
+- After DB or workflow changes, sanity-check: login, dashboard load, one PR/PO path relevant to the change.

@@ -144,11 +144,12 @@ That installs at least:
 - **sqlalchemy** — database ORM and SQLite access  
 - **pandas** — tables and CSV handling (e.g. budget import)  
 - **bcrypt** — password hashing for login  
+- **plotly** — interactive charts (e.g. dashboard PR-by-status bar chart)  
 
 **Verify imports (optional):**
 
 ```bash
-python -c "import streamlit, sqlalchemy, pandas, bcrypt; print('OK')"
+python -c "import streamlit, sqlalchemy, pandas, bcrypt, plotly; print('OK')"
 ```
 
 If this prints `OK`, the environment is ready.
@@ -200,7 +201,7 @@ To wipe local data and force a **fresh seed** on next launch:
 | Problem | What to try |
 |---------|-------------|
 | `python` / `pip` not found | Use `python3` and `pip3` on macOS/Linux, or reinstall Python with **PATH** enabled on Windows. |
-| `ModuleNotFoundError: No module named 'sqlalchemy'` (or pandas, bcrypt) | Activate `.venv`, then run `pip install -r requirements.txt` again. |
+| `ModuleNotFoundError: No module named 'sqlalchemy'` (or pandas, bcrypt, plotly) | Activate `.venv`, then run `pip install -r requirements.txt` again. |
 | Wrong package versions | In the activated venv: `pip install --upgrade -r requirements.txt`. |
 | Port already in use | `streamlit run app.py --server.port 8502` |
 | Blank page or Streamlit errors | Read the stack trace in the terminal; confirm you ran `streamlit run app.py` from the folder that contains `app.py`. |
@@ -233,7 +234,7 @@ To wipe local data and force a **fresh seed** on next launch:
 | `seed.py` | One-time demo data when the database is empty |
 | `utils.py` | Document numbering, PR budget totals, budget consume/return, filters, validation helpers |
 | `pms_ui.py` | Shared Streamlit CSS (page background, buttons, form fields) |
-| `dashboard.py` | Dashboard screen |
+| `dashboard.py` | Dashboard metrics and charts (Plotly PR-by-status bar chart) |
 | `pr_ui.py` | Purchase request workspace (list, edit, workflow, line items) |
 | `po_ui.py` | Purchase order workspace |
 | `ir_ui.py` | Inventory receipt workspace (attachments under `data/ir_attachments/`) |
@@ -245,7 +246,7 @@ To wipe local data and force a **fresh seed** on next launch:
 
 | Path | Purpose |
 |------|---------|
-| `requirements.txt` | Python dependencies (`streamlit`, `sqlalchemy`, `pandas`, `bcrypt`) |
+| `requirements.txt` | Python dependencies (`streamlit`, `sqlalchemy`, `pandas`, `bcrypt`, `plotly`) |
 | `README.md` | Setup, run instructions, workflow diagrams, preview screenshots |
 | `.gitignore` | Excludes `.venv/`, `data/` (entire tree: DB + `ir_attachments/`), `__pycache__/`, `.env`, `.streamlit/secrets.toml` |
 | `Lab 1 Report.pdf` | Lab write-up (in repo when included with your submission) |
